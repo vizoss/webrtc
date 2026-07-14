@@ -20,6 +20,7 @@
 #include "audio_engine_device.h"
 
 #include <mach/mach_time.h>
+#include <algorithm>
 #include <cmath>
 #include <optional>
 
@@ -774,30 +775,39 @@ int32_t AudioEngineDevice::MicrophoneMute(bool* enabled) const {
 
 int32_t AudioEngineDevice::StereoPlayoutIsAvailable(bool* available) const {
   LOGI() << "StereoPlayoutIsAvailable";
+  RTC_DCHECK_RUN_ON(thread_);
   if (available == nullptr) {
     return -1;
   }
 
-  *available = false;
+  // Report the real hardware output format's channel count when known;
+  // optimistically assume stereo is possible before the engine exists (the
+  // achieved channel count will still gracefully clamp down at engine setup
+  // time regardless of what this diagnostic getter reports).
+  *available =
+      engine_device_ == nil || [engine_device_.outputNode outputFormatForBus:0].channelCount >= 2;
 
   return 0;
 }
 
 int32_t AudioEngineDevice::SetStereoPlayout(bool enable) {
-  LOGW() << "SetStereoPlayout: Not implemented, value:" << enable;
+  LOGI() << "SetStereoPlayout: " << enable;
+  RTC_DCHECK_RUN_ON(thread_);
 
-  audio_device_buffer_->SetPlayoutChannels(1);
-
-  return 0;
+  return ModifyEngineState([enable](EngineState state) -> EngineState {
+    state.desired_output_channels = enable ? 2 : 1;
+    return state;
+  });
 }
 
 int32_t AudioEngineDevice::StereoPlayout(bool* enabled) const {
   LOGI() << "StereoPlayout";
+  RTC_DCHECK_RUN_ON(thread_);
   if (enabled == nullptr) {
     return -1;
   }
 
-  *enabled = false;
+  *enabled = engine_state_.desired_output_channels == 2;
 
   return 0;
 }
@@ -807,32 +817,68 @@ int32_t AudioEngineDevice::StereoPlayout(bool* enabled) const {
 
 int32_t AudioEngineDevice::StereoRecordingIsAvailable(bool* available) const {
   LOGI() << "StereoRecordingIsAvailable";
+  RTC_DCHECK_RUN_ON(thread_);
   if (available == nullptr) {
     return -1;
   }
 
-  *available = false;
+  // See StereoPlayoutIsAvailable() for why nil engine reports true.
+  *available =
+      engine_device_ == nil || [engine_device_.inputNode outputFormatForBus:0].channelCount >= 2;
 
   return 0;
 }
 
 int32_t AudioEngineDevice::SetStereoRecording(bool enable) {
-  LOGW() << "SetStereoRecording: Not implemented, value: " << enable;
+  LOGI() << "SetStereoRecording: " << enable;
+  RTC_DCHECK_RUN_ON(thread_);
 
-  audio_device_buffer_->SetRecordingChannels(1);
-
-  return 0;
+  return ModifyEngineState([enable](EngineState state) -> EngineState {
+    state.desired_input_channels = enable ? 2 : 1;
+    return state;
+  });
 }
 
 int32_t AudioEngineDevice::StereoRecording(bool* enabled) const {
   LOGI() << "StereoRecording";
+  RTC_DCHECK_RUN_ON(thread_);
   if (enabled == nullptr) {
     return -1;
   }
 
-  *enabled = false;
+  *enabled = engine_state_.desired_input_channels == 2;
 
   return 0;
+}
+
+// ----------------------------------------------------------------------------------------------------
+// Stereo Mode (single global toggle, see AudioDeviceModule::SetStereoMode())
+
+int32_t AudioEngineDevice::SetStereoMode(bool enable) {
+  LOGI() << "SetStereoMode: " << enable;
+  RTC_DCHECK_RUN_ON(thread_);
+
+  // Sets both directions in a single ModifyEngineState() call (rather than
+  // calling SetStereoRecording()/SetStereoPlayout() separately) so the engine
+  // is only torn down and rebuilt once instead of twice. Each direction
+  // clamps to the real hardware channel count internally (see
+  // ApplyDeviceEngineState()), falling back to mono when the hardware
+  // doesn't support stereo. stereo_mode_enabled_ tracks the requested mode,
+  // independent of whether real stereo hardware capture/playout was
+  // actually achieved.
+  int32_t result = ModifyEngineState([enable](EngineState state) -> EngineState {
+    state.desired_input_channels = enable ? 2 : 1;
+    state.desired_output_channels = enable ? 2 : 1;
+    return state;
+  });
+  if (result == 0) {
+    stereo_mode_enabled_.store(enable);
+  }
+  return result;
+}
+
+bool AudioEngineDevice::StereoModeEnabled() const {
+  return stereo_mode_enabled_.load();
 }
 
 // ----------------------------------------------------------------------------------------------------
@@ -1253,8 +1299,23 @@ int32_t AudioEngineDevice::EnableBuiltInNS(bool enable) {
 // Misc
 
 #if defined(WEBRTC_IOS)
-int AudioEngineDevice::GetPlayoutAudioParameters(AudioParameters* params) const { return -1; }
-int AudioEngineDevice::GetRecordAudioParameters(AudioParameters* params) const { return -1; }
+int AudioEngineDevice::GetPlayoutAudioParameters(AudioParameters* params) const {
+  RTC_DCHECK_RUN_ON(thread_);
+  if (params == nullptr || !playout_parameters_.is_valid()) {
+    return -1;
+  }
+  *params = playout_parameters_;
+  return 0;
+}
+
+int AudioEngineDevice::GetRecordAudioParameters(AudioParameters* params) const {
+  RTC_DCHECK_RUN_ON(thread_);
+  if (params == nullptr || !record_parameters_.is_valid()) {
+    return -1;
+  }
+  *params = record_parameters_;
+  return 0;
+}
 #endif
 
 int32_t AudioEngineDevice::PlayoutDelay(uint16_t* delayMS) const {
@@ -2233,6 +2294,18 @@ int32_t AudioEngineDevice::ApplyDeviceEngineState(EngineStateUpdate state) {
     }
 
     engine_device_ = nil;
+
+    // The Float32->Int16 converter and its buffer are built for a specific
+    // input channel count. If they aren't torn down here, the "Enable input"
+    // step below will see a non-null `converter_ref_` and skip rebuilding it
+    // for the new format (see its `if (converter_ref_ == nullptr)` guard) --
+    // harmless for recreates that don't change the channel count, but stale
+    // and mismatched for one that does (e.g. a stereo mode toggle).
+    if (converter_ref_ != nullptr) {
+      AudioConverterDispose(converter_ref_);
+      converter_ref_ = nullptr;
+    }
+    converter_buffer_ = nil;
   }
 
   // --------------------------------------------------------------------------------------------
@@ -2395,14 +2468,29 @@ int32_t AudioEngineDevice::ApplyDeviceEngineState(EngineStateUpdate state) {
       return rollback(kAudioEnginePlayoutDeviceNotAvailableError);
     }
 
+    // Clamp the app-requested channel count to what the hardware actually
+    // offers; the requested count is never more than 2 (see SetStereoMode()),
+    // so this naturally falls back to mono when the output device doesn't
+    // support stereo.
+    const size_t achieved_output_channels =
+        std::min<size_t>(state.next.desired_output_channels, output_node_format.channelCount);
+
+    // Force interleaved regardless of the native node's own interleavedness
+    // (AVAudioEngine's internal standard format is typically deinterleaved
+    // once channels > 1). source_node_ is independently constructed with the
+    // always-interleaved rtc_output_format below, so this connection format
+    // only needs to match that for AVAudioEngine's automatic conversion
+    // between connected nodes to have a single, unambiguous interleaved
+    // shape to convert into/out of.
     AVAudioFormat* engine_output_format = [[AVAudioFormat alloc]
         initWithCommonFormat:output_node_format.commonFormat  // Usually float32
                   sampleRate:output_node_format.sampleRate
-                    channels:1
-                 interleaved:output_node_format.interleaved];
+                    channels:achieved_output_channels
+                 interleaved:YES];
 
     audio_device_buffer_->SetPlayoutSampleRate(engine_output_format.sampleRate);
     audio_device_buffer_->SetPlayoutChannels(engine_output_format.channelCount);
+    playout_parameters_.reset(engine_output_format.sampleRate, engine_output_format.channelCount);
     RTC_DCHECK(audio_device_buffer_ != nullptr);
     fine_audio_buffer_.reset(new FineAudioBuffer(audio_device_buffer_.get()));
 
@@ -2415,9 +2503,14 @@ int32_t AudioEngineDevice::ApplyDeviceEngineState(EngineStateUpdate state) {
     AVAudioFormat* rtc_output_format =
         [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16
                                          sampleRate:engine_output_format.sampleRate
-                                           channels:1
+                                           channels:achieved_output_channels
                                         interleaved:YES];
 
+    // Captured by value: fixed for the lifetime of this block (a channel
+    // count change goes through DidUpdateChannels() -> full engine recreate,
+    // which rebuilds this block from scratch), so there's no need to re-read
+    // it via an atomic load on this real-time render callback.
+    const size_t output_channels_for_block = achieved_output_channels;
     AVAudioSourceNodeRenderBlock source_block =
         ^OSStatus(BOOL* isSilence, const AudioTimeStamp* timestamp, AVAudioFrameCount frameCount,
                   AudioBufferList* outputData) {
@@ -2425,8 +2518,12 @@ int32_t AudioEngineDevice::ApplyDeviceEngineState(EngineStateUpdate state) {
 
           int16_t* dest_buffer = (int16_t*)outputData->mBuffers[0].mData;
 
+          // The destination buffer is interleaved, so its total sample count
+          // is frameCount * channels, not just frameCount (which would only
+          // be correct for mono).
           fine_audio_buffer_->GetPlayoutData(
-              webrtc::ArrayView<int16_t>(static_cast<int16_t*>(dest_buffer), frameCount),
+              webrtc::ArrayView<int16_t>(static_cast<int16_t*>(dest_buffer),
+                                         frameCount * output_channels_for_block),
               kFixedPlayoutDelayEstimate);
 
           return noErr;
@@ -2549,21 +2646,38 @@ int32_t AudioEngineDevice::ApplyDeviceEngineState(EngineStateUpdate state) {
     });
 
     // When VoiceProcessingIO is enabled, channels must be reduced from Mac's default 9 channels
-    // to 2 or lower.
+    // to 2 or lower. The app-requested channel count (see SetStereoMode()) is
+    // never more than 2, so clamping to the hardware's channel count already
+    // satisfies that and naturally falls back to mono when the microphone
+    // doesn't support stereo capture.
+    const size_t achieved_input_channels =
+        std::min<size_t>(state.next.desired_input_channels, input_node_format.channelCount);
+
+    // Force interleaved regardless of the native node's own interleavedness.
+    // This matters much more here than for output: AVAudioSinkNode has no
+    // initWithFormat: initializer, so unlike source_node_ (which is
+    // independently constructed with the always-interleaved
+    // rtc_input_format), sink_node_'s receiver block gets exactly whatever
+    // format it is connected with below. If that format were deinterleaved
+    // (the AVAudioEngine standard/native format once channels > 1), the sink
+    // block would receive multiple separate buffers instead of one
+    // interleaved buffer, breaking the `mNumberBuffers == 1` assumption the
+    // conversion code below depends on.
     AVAudioFormat* engine_input_format = [[AVAudioFormat alloc]
         initWithCommonFormat:input_node_format.commonFormat  // Usually float32
                   sampleRate:input_node_format.sampleRate
-                    channels:1
-                 interleaved:input_node_format.interleaved];
+                    channels:achieved_input_channels
+                 interleaved:YES];
 
     AVAudioFormat* rtc_input_format =
         [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16
                                          sampleRate:engine_input_format.sampleRate
-                                           channels:1
+                                           channels:achieved_input_channels
                                         interleaved:YES];
 
     audio_device_buffer_->SetRecordingSampleRate(rtc_input_format.sampleRate);
     audio_device_buffer_->SetRecordingChannels(rtc_input_format.channelCount);
+    record_parameters_.reset(rtc_input_format.sampleRate, rtc_input_format.channelCount);
     RTC_DCHECK(audio_device_buffer_ != nullptr);
     fine_audio_buffer_.reset(new FineAudioBuffer(audio_device_buffer_.get()));
 
@@ -2605,6 +2719,11 @@ int32_t AudioEngineDevice::ApplyDeviceEngineState(EngineStateUpdate state) {
     }
 
     // Convert to Int16 buffers within the sink block.
+    // Captured by value: fixed for the lifetime of this block (a channel
+    // count change goes through DidUpdateChannels() -> full engine recreate,
+    // which rebuilds this block from scratch), so there's no need to re-read
+    // it via an atomic load on this real-time capture callback.
+    const size_t input_channels_for_block = achieved_input_channels;
     AVAudioSinkNodeReceiverBlock sink_block =
         ^OSStatus(const AudioTimeStamp* timestamp, AVAudioFrameCount frameCount,
                   const AudioBufferList* inputData) {
@@ -2628,9 +2747,12 @@ int32_t AudioEngineDevice::ApplyDeviceEngineState(EngineStateUpdate state) {
           const int16_t* rtc_buffer = (int16_t*)converter_buffer_abl->mBuffers[0].mData;  // Float32
           const int64_t capture_time_ns = timestamp->mHostTime * machTickUnitsToNanoseconds_;
 
+          // The converted buffer is interleaved, so its total sample count is
+          // frameCount * channels, not just frameCount (which would only be
+          // correct for mono).
           fine_audio_buffer_->DeliverRecordedData(
-              webrtc::ArrayView<const int16_t>(rtc_buffer, frameCount), kFixedRecordDelayEstimate,
-              capture_time_ns);
+              webrtc::ArrayView<const int16_t>(rtc_buffer, frameCount * input_channels_for_block),
+              kFixedRecordDelayEstimate, capture_time_ns);
 
           return noErr;
         };

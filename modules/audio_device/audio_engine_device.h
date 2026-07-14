@@ -169,6 +169,25 @@ class AudioEngineDevice : public AudioDeviceModule, public AudioSessionObserver 
     uint32_t default_output_device_update_count = 0;  // Track default switch count
     uint32_t default_input_device_update_count = 0;
 
+    // App-requested stereo mode (see AudioDeviceModule::SetStereoMode()). The
+    // *achieved* channel count (1 or 2) may fall back to mono internally when
+    // the hardware doesn't support stereo (ApplyDeviceEngineState() clamps to
+    // min(desired, inputNode/outputNode's real hardware channel count)); that
+    // fallback is not reflected here, only the app's request, since a change
+    // in the app's request is what should trigger re-evaluating the engine's
+    // I/O format.
+    //
+    // NEEDS REAL-DEVICE VERIFICATION: on iOS, whether the input node's
+    // reported hardware channel count reflects the true microphone array
+    // capability by default, or whether it additionally requires
+    // AVAudioSession.preferredInputNumberOfChannels to be raised first (this
+    // class does not currently touch AVAudioSession configuration, which is
+    // managed by the surrounding RTCAudioSession/app layer) has not been
+    // confirmed on real hardware. If stereo capture never activates on a
+    // device with a stereo-capable mic, that's the first thing to check.
+    size_t desired_input_channels = 1;
+    size_t desired_output_channels = 1;
+
     bool operator==(const EngineState& rhs) const {
       return input_enabled == rhs.input_enabled && input_running == rhs.input_running &&
              output_enabled == rhs.output_enabled && output_running == rhs.output_running &&
@@ -183,7 +202,9 @@ class AudioEngineDevice : public AudioDeviceModule, public AudioSessionObserver 
              advanced_ducking == rhs.advanced_ducking && ducking_level == rhs.ducking_level &&
              output_device_id == rhs.output_device_id && input_device_id == rhs.input_device_id &&
              default_output_device_update_count == rhs.default_output_device_update_count &&
-             default_input_device_update_count == rhs.default_input_device_update_count;
+             default_input_device_update_count == rhs.default_input_device_update_count &&
+             desired_input_channels == rhs.desired_input_channels &&
+             desired_output_channels == rhs.desired_output_channels;
     }
 
     bool operator!=(const EngineState& rhs) const { return !(*this == rhs); }
@@ -336,6 +357,13 @@ class AudioEngineDevice : public AudioDeviceModule, public AudioSessionObserver 
   int32_t SetStereoRecording(bool enable) override;
   int32_t StereoRecording(bool* enabled) const override;
 
+  // Single global toggle: sets the same underlying state as
+  // SetStereoPlayout()/SetStereoRecording() but in one combined engine-state
+  // change (avoiding two separate engine recreates), and tracks the combined
+  // app-requested state (see AudioDeviceModule::SetStereoMode()).
+  int32_t SetStereoMode(bool enable) override;
+  bool StereoModeEnabled() const override;
+
   int32_t RegisterAudioCallback(AudioTransport* audioCallback) override;
 
   // Built-in AEC/AGC/NS via VPIO. Available on device, not on simulator.
@@ -448,6 +476,11 @@ class AudioEngineDevice : public AudioDeviceModule, public AudioSessionObserver 
 
     bool DidUpdateMuteMode() const { return prev.mute_mode != next.mute_mode; }
 
+    bool DidUpdateChannels() const {
+      return prev.desired_input_channels != next.desired_input_channels ||
+             prev.desired_output_channels != next.desired_output_channels;
+    }
+
     bool IsEngineRestartRequired() const { return DidUpdateAudioGraph(); }
 
     bool IsEngineRecreateRequired() const {
@@ -467,7 +500,11 @@ class AudioEngineDevice : public AudioDeviceModule, public AudioSessionObserver 
       // a clean audio hardware state.
       bool voice_processing = DidUpdateVoiceProcessingEnabled();
 
-      return device || default_device || special_case || voice_processing;
+      // Changing the desired channel count requires rebuilding the node
+      // formats/converters, same as a voice-processing toggle.
+      bool channels = DidUpdateChannels();
+
+      return device || default_device || special_case || voice_processing || channels;
     }
 
     bool DidEnableManualRenderingMode() const {
@@ -538,6 +575,13 @@ class AudioEngineDevice : public AudioDeviceModule, public AudioSessionObserver 
 
   // Set to true after successful call to Init(), false otherwise.
   bool initialized_ RTC_GUARDED_BY(thread_);
+
+  // Set from SetStereoMode(), which runs on `thread_` like all other control
+  // calls. Read from StereoModeEnabled(), which per the AudioDeviceModule
+  // interface contract must be safe to call from any thread (e.g. the
+  // signaling thread, while building SDP offers/answers), hence the atomic
+  // instead of relying on `thread_`.
+  std::atomic<bool> stereo_mode_enabled_{false};
 
   AudioDeviceObserver* observer_ RTC_GUARDED_BY(thread_) = nullptr;
 
