@@ -132,6 +132,16 @@ class MockAudioDeviceModule : public AudioDeviceModule {
               (const, override));
   MOCK_METHOD(int32_t, SetStereoRecording, (bool enable), (override));
   MOCK_METHOD(int32_t, StereoRecording, (bool* enabled), (const, override));
+  // Deliberately NOT mocked with MOCK_METHOD: SetStereoMode()/StereoModeEnabled()
+  // have non-pure base-class defaults (return -1 / false), and
+  // ApplyAudioProcessingOptions() unconditionally calls StereoModeEnabled() on
+  // every invocation. Mocking it here would require every existing
+  // StrictMock<MockAudioDeviceModule> test that exercises that code path (there
+  // are 20+ in webrtc_voice_engine_unittest.cc alone) to add a matching
+  // EXPECT_CALL. Tests that need StereoModeEnabled() == true should use a small
+  // local subclass with a real override instead (see e.g.
+  // StateMockAudioDeviceModule in webrtc_voice_engine_unittest.cc for the
+  // established pattern).
   MOCK_METHOD(int32_t, PlayoutDelay, (uint16_t * delayMS), (const, override));
   MOCK_METHOD(bool, BuiltInAECIsAvailable, (), (const, override));
   MOCK_METHOD(bool, BuiltInAGCIsAvailable, (), (const, override));

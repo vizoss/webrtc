@@ -23,6 +23,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <atomic>
 #include <memory>
 #include <optional>
 
@@ -123,6 +124,12 @@ class FakeAudioCaptureModule : public webrtc::AudioDeviceModule {
   int32_t StereoRecordingIsAvailable(bool* available) const override;
   int32_t SetStereoRecording(bool enable) override;
   int32_t StereoRecording(bool* enabled) const override;
+
+  // Trivial real implementation (rather than the base class's stub) so tests
+  // can exercise stereo-mode-dependent behavior (e.g. SDP stereo declaration,
+  // echo-cancellation auto-disable) without needing a platform ADM.
+  int32_t SetStereoMode(bool enable) override;
+  bool StereoModeEnabled() const override;
 
   int32_t PlayoutDelay(uint16_t* delay_ms) const override;
 
@@ -226,6 +233,11 @@ class FakeAudioCaptureModule : public webrtc::AudioDeviceModule {
 
   // Set to true when Init() is called.
   bool initialized_ = false;
+
+  // Backs SetStereoMode()/StereoModeEnabled(). Atomic because
+  // StereoModeEnabled() must be safe to call from any thread per the
+  // AudioDeviceModule interface contract.
+  std::atomic<bool> stereo_mode_enabled_{false};
 
   // Protects variables that are accessed from process_thread_ and
   // the main thread.

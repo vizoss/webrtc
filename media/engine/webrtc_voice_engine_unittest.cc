@@ -127,6 +127,16 @@ class StateMockAudioDeviceModule : public webrtc::test::MockAudioDeviceModule {
   AudioDeviceModule::PlatformAudioProcessingState state;
 };
 
+// Real (non-gmock) override so tests can flip stereo mode on without adding
+// an EXPECT_CALL to every other test that shares MockAudioDeviceModule (see
+// the comment on StereoModeEnabled() in mock_audio_device.h).
+class StereoModeMockAudioDeviceModule : public webrtc::test::MockAudioDeviceModule {
+ public:
+  bool StereoModeEnabled() const override { return stereo_mode_enabled; }
+
+  bool stereo_mode_enabled = false;
+};
+
 const webrtc::Codec kPcmuCodec = webrtc::CreateAudioCodec(0, "PCMU", 8000, 1);
 const webrtc::Codec kOpusCodec =
     webrtc::CreateAudioCodec(111, "opus", 48000, 2);
@@ -505,6 +515,53 @@ TEST(AudioProcessingControllerTest, PlatformResolvesDisabledWhenEnableFails) {
 
   webrtc::AudioProcessing::Config apm_config = ApplyAudioProcessingOptionsForTest(options, adm.get());
   EXPECT_FALSE(apm_config.echo_canceller.enabled);
+}
+
+TEST(AudioProcessingControllerTest, StereoModeForcesEchoCancellationOff) {
+  webrtc::scoped_refptr<StereoModeMockAudioDeviceModule> adm =
+      webrtc::make_ref_counted<StereoModeMockAudioDeviceModule>();
+  adm->stereo_mode_enabled = true;
+  webrtc::AudioOptions options;
+  // The app didn't ask to change echo cancellation at all (as if this call
+  // were only about some unrelated option); stereo mode must still force it
+  // off.
+  options.auto_gain_control = true;
+  options.auto_gain_control_mode = webrtc::AudioProcessingMode::kAutomatic;
+
+  EXPECT_CALL(*adm, BuiltInAECIsAvailable()).WillOnce(Return(true));
+  EXPECT_CALL(*adm, EnableBuiltInAEC(false)).WillOnce(Return(0));
+  EXPECT_CALL(*adm, BuiltInAGCIsAvailable()).WillOnce(Return(false));
+
+  webrtc::AudioProcessing::Config apm_config = ApplyAudioProcessingOptionsForTest(options, adm.get());
+  EXPECT_FALSE(apm_config.echo_canceller.enabled);
+}
+
+TEST(AudioProcessingControllerTest, StereoModeLeavesNoiseSuppressionAndAgcUntouched) {
+  webrtc::scoped_refptr<StereoModeMockAudioDeviceModule> adm =
+      webrtc::make_ref_counted<StereoModeMockAudioDeviceModule>();
+  adm->stereo_mode_enabled = true;
+  webrtc::AudioOptions options;
+  options.echo_cancellation = true;
+  options.echo_cancellation_mode = webrtc::AudioProcessingMode::kAutomatic;
+  options.noise_suppression = true;
+  options.noise_suppression_mode = webrtc::AudioProcessingMode::kAutomatic;
+  options.auto_gain_control = true;
+  options.auto_gain_control_mode = webrtc::AudioProcessingMode::kAutomatic;
+
+  // Echo cancellation is forced off regardless of the request.
+  EXPECT_CALL(*adm, BuiltInAECIsAvailable()).WillOnce(Return(true));
+  EXPECT_CALL(*adm, EnableBuiltInAEC(false)).WillOnce(Return(0));
+  // Noise suppression and AGC follow the app's original (unmodified) request:
+  // platform unavailable for both, so automatic mode falls back to software,
+  // exactly as it would with stereo mode off (see
+  // AutomaticFallsBackToSoftwareWhenUnavailable).
+  EXPECT_CALL(*adm, BuiltInNSIsAvailable()).WillOnce(Return(false));
+  EXPECT_CALL(*adm, BuiltInAGCIsAvailable()).WillOnce(Return(false));
+
+  webrtc::AudioProcessing::Config apm_config = ApplyAudioProcessingOptionsForTest(options, adm.get());
+  EXPECT_FALSE(apm_config.echo_canceller.enabled);
+  EXPECT_TRUE(apm_config.noise_suppression.enabled);
+  EXPECT_TRUE(apm_config.gain_controller1.enabled);
 }
 
 TEST(AudioProcessingControllerTest, SoftwareDisablesPlatformAndEnablesApm) {

@@ -99,11 +99,12 @@ class SdpMungingTest : public ::testing::Test {
       // Note: We use a PeerConnectionFactory with a distinct
       // signaling thread, so that thread handling can be tested.
       : signaling_thread_(CreateAndStartThread()),
+        fake_audio_capture_module_(FakeAudioCaptureModule::Create()),
         pc_factory_(CreatePeerConnectionFactory(
             nullptr,
             nullptr,
             signaling_thread_.get(),
-            FakeAudioCaptureModule::Create(),
+            fake_audio_capture_module_,
             CreateBuiltinAudioEncoderFactory(),
             CreateBuiltinAudioDecoderFactory(),
             std::make_unique<
@@ -145,6 +146,9 @@ class SdpMungingTest : public ::testing::Test {
 
  protected:
   std::unique_ptr<Thread> signaling_thread_;
+  // Declared (and therefore initialized) before pc_factory_ so tests can
+  // toggle stereo mode on the same ADM instance the factory uses.
+  scoped_refptr<FakeAudioCaptureModule> fake_audio_capture_module_;
   scoped_refptr<PeerConnectionFactoryInterface> pc_factory_;
 
  private:
@@ -841,6 +845,46 @@ TEST_F(SdpMungingTest, OpusStereo) {
   EXPECT_THAT(
       metrics::Samples("WebRTC.PeerConnection.SdpMunging.Offer.Initial"),
       ElementsAre(Pair(SdpMungingType::kAudioCodecsFmtpOpusStereo, 1)));
+}
+
+TEST_F(SdpMungingTest, OpusStereoFromStereoModeIsNotMunging) {
+  // Unlike the OpusStereo test above (which munges the codec params itself
+  // after CreateOffer), this enables the ADM's stereo mode *before*
+  // CreateOffer so the library's own internal rewrite (see
+  // WebRtcSessionDescriptionFactory::ApplyStereoModeToDescription) adds the
+  // fmtp params as part of normal offer generation.
+  fake_audio_capture_module_->SetStereoMode(true);
+  auto pc = CreatePeerConnection();
+  pc->AddAudioTrack("audio_track", {});
+
+  std::unique_ptr<SessionDescriptionInterface> offer = pc->CreateOffer();
+  auto& contents = offer->description()->contents();
+  ASSERT_THAT(contents, SizeIs(1));
+  auto* media_description = contents[0].media_description();
+  ASSERT_THAT(media_description, Not(IsNull()));
+  bool found_opus = false;
+  for (const auto& codec : media_description->codecs()) {
+    if (codec.name == kOpusCodecName) {
+      found_opus = true;
+      std::string stereo_value;
+      EXPECT_TRUE(codec.GetParam(kCodecParamStereo, &stereo_value));
+      EXPECT_EQ(stereo_value, kParamValueTrue);
+      std::string sprop_stereo_value;
+      EXPECT_TRUE(codec.GetParam(kCodecParamSPropStereo, &sprop_stereo_value));
+      EXPECT_EQ(sprop_stereo_value, kParamValueTrue);
+    }
+  }
+  EXPECT_TRUE(found_opus);
+
+  RTCError error;
+  EXPECT_TRUE(pc->SetLocalDescription(std::move(offer), &error));
+  // The library generated this fmtp itself, so applying it via
+  // SetLocalDescription must not be flagged as app-side SDP munging: the
+  // detector's own freshly-regenerated comparison copy goes through the same
+  // ApplyStereoModeToDescription() call and should match exactly.
+  EXPECT_THAT(
+      metrics::Samples("WebRTC.PeerConnection.SdpMunging.Offer.Initial"),
+      ElementsAre(Pair(SdpMungingType::kNoModification, 1)));
 }
 
 TEST_F(SdpMungingTest, OpusFec) {

@@ -387,6 +387,15 @@ int32_t FakeAudioCaptureModule::StereoRecording(bool* /*enabled*/) const {
   return 0;
 }
 
+int32_t FakeAudioCaptureModule::SetStereoMode(bool enable) {
+  stereo_mode_enabled_.store(enable);
+  return 0;
+}
+
+bool FakeAudioCaptureModule::StereoModeEnabled() const {
+  return stereo_mode_enabled_.load();
+}
+
 int32_t FakeAudioCaptureModule::PlayoutDelay(uint16_t* delay_ms) const {
   // No delay since audio frames are dropped.
   *delay_ms = 0;
