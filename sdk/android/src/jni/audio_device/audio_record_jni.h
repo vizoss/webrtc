@@ -78,6 +78,8 @@ class AudioRecordJni : public AudioInput {
   int32_t EnableBuiltInAEC(bool enable) override;
   int32_t EnableBuiltInNS(bool enable) override;
 
+  bool SetStereoMode(bool enable) override;
+
   std::optional<bool> BuiltInAECIsRequested() const override;
   std::optional<bool> BuiltInAECIsEnabled() const override;
   std::optional<bool> BuiltInNSIsRequested() const override;
@@ -117,7 +119,10 @@ class AudioRecordJni : public AudioInput {
   JNIEnv* env_ = nullptr;
   jni_zero::ScopedJavaGlobalRef<jobject> j_audio_record_;
 
-  const AudioParameters audio_parameters_;
+  // Not const: SetStereoMode() rewrites the channel count in place so a
+  // subsequent InitRecording() picks up the new value. Sample rate and
+  // frames-per-buffer never change after construction.
+  AudioParameters audio_parameters_;
 
   // Delay estimate of the total round-trip delay (input + output).
   // Fixed value set once in AttachAudioBuffer() and it can take one out of two

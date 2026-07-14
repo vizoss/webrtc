@@ -145,6 +145,16 @@ std::optional<uint32_t> AAudioPlayer::MinSpeakerVolume() const {
   return std::nullopt;
 }
 
+bool AAudioPlayer::SetStereoMode(bool enable) {
+  RTC_LOG(LS_INFO) << "SetStereoMode: " << enable;
+  if (!enable) {
+    // Always mono today, so "disable stereo" trivially succeeds.
+    return true;
+  }
+  RTC_LOG(LS_WARNING) << "Stereo playout is not supported on the AAudio path; staying mono";
+  return false;
+}
+
 void AAudioPlayer::OnErrorCallback(aaudio_result_t error) {
   RTC_LOG(LS_ERROR) << "OnErrorCallback: " << AAudio_convertResultToText(error);
   // TODO(henrika): investigate if we can use a thread checker here. Initial

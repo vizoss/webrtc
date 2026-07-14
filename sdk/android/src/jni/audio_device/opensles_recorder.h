@@ -84,6 +84,10 @@ class OpenSLESRecorder : public AudioInput {
   int EnableBuiltInAEC(bool enable) override;
   int EnableBuiltInNS(bool enable) override;
 
+  // Stereo capture is not supported on the legacy OpenSL ES path. Always
+  // stays mono; returns false when `enable` is true.
+  bool SetStereoMode(bool enable) override;
+
  private:
   // Obtaines the SL Engine Interface from the existing global Engine object.
   // The interface exposes creation methods of all the OpenSL ES object types.

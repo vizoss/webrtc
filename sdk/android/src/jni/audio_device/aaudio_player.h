@@ -75,6 +75,10 @@ class AAudioPlayer final : public AudioOutput, public AAudioObserverInterface {
   std::optional<uint32_t> MaxSpeakerVolume() const override;
   std::optional<uint32_t> MinSpeakerVolume() const override;
 
+  // Stereo playout is not yet supported on the AAudio path. Always stays
+  // mono; returns false when `enable` is true.
+  bool SetStereoMode(bool enable) override;
+
  protected:
   // AAudioObserverInterface implementation.
 

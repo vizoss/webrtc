@@ -204,6 +204,16 @@ std::optional<uint32_t> OpenSLESPlayer::MinSpeakerVolume() const {
   return std::nullopt;
 }
 
+bool OpenSLESPlayer::SetStereoMode(bool enable) {
+  ALOGD("SetStereoMode(%d)", enable);
+  if (!enable) {
+    // Always mono today, so "disable stereo" trivially succeeds.
+    return true;
+  }
+  ALOGW("Stereo playout is not supported on the OpenSL ES path; staying mono");
+  return false;
+}
+
 void OpenSLESPlayer::AttachAudioBuffer(AudioDeviceBuffer* audioBuffer) {
   ALOGD("AttachAudioBuffer");
   RTC_DCHECK(thread_checker_.IsCurrent());

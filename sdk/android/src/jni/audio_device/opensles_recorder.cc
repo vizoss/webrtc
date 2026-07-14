@@ -224,6 +224,16 @@ int OpenSLESRecorder::EnableBuiltInNS(bool enable) {
   return 0;
 }
 
+bool OpenSLESRecorder::SetStereoMode(bool enable) {
+  ALOGD("SetStereoMode(%d)", enable);
+  if (!enable) {
+    // Always mono today, so "disable stereo" trivially succeeds.
+    return true;
+  }
+  ALOGW("Stereo capture is not supported on the OpenSL ES path; staying mono");
+  return false;
+}
+
 bool OpenSLESRecorder::ObtainEngineInterface() {
   ALOGD("ObtainEngineInterface");
   RTC_DCHECK(thread_checker_.IsCurrent());

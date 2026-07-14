@@ -12,6 +12,7 @@
 
 #include <jni.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -504,6 +505,27 @@ class AndroidAudioDeviceModule : public AudioDeviceModule {
     return 0;
   }
 
+  int32_t SetStereoMode(bool enable) override {
+    RTC_DLOG(LS_INFO) << __FUNCTION__ << "(" << enable << ")";
+    RTC_DCHECK(thread_checker_.IsCurrent());
+    if (!initialized_) {
+      return -1;
+    }
+    // Best-effort on both directions; each falls back to mono internally if
+    // the hardware doesn't support stereo. Neither call is treated as fatal:
+    // stereo_mode_enabled_ tracks the requested mode, independent of whether
+    // real stereo hardware capture/playout was actually achieved (see
+    // AudioInput::SetStereoMode()/AudioOutput::SetStereoMode()).
+    input_->SetStereoMode(enable);
+    output_->SetStereoMode(enable);
+    stereo_mode_enabled_.store(enable);
+    return 0;
+  }
+
+  bool StereoModeEnabled() const override {
+    return stereo_mode_enabled_.load();
+  }
+
   int32_t PlayoutDelay(uint16_t* delay_ms) const override {
     // Best guess we can do is to use half of the estimated total delay.
     *delay_ms = playout_delay_ms_ / 2;
@@ -627,6 +649,13 @@ class AndroidAudioDeviceModule : public AudioDeviceModule {
   std::unique_ptr<AudioDeviceBuffer> audio_device_buffer_;
 
   bool initialized_;
+
+  // Set from SetStereoMode(), which runs on the ADM's own thread like all
+  // other control calls. Read from StereoModeEnabled(), which per the
+  // AudioDeviceModule interface contract must be safe to call from any
+  // thread (e.g. the signaling thread, while building SDP offers/answers),
+  // hence the atomic instead of relying on thread_checker_.
+  std::atomic<bool> stereo_mode_enabled_{false};
 };
 
 }  // namespace

@@ -268,6 +268,63 @@ std::optional<bool> AudioRecordJni::BuiltInNSIsEnabled() const {
   return Java_WebRtcAudioRecord_isBuiltInNSEnabled(env_, j_audio_record_);
 }
 
+bool AudioRecordJni::SetStereoMode(bool enable) {
+  RTC_LOG(LS_INFO) << "SetStereoMode(" << enable << ")";
+  RTC_DCHECK(thread_checker_.IsCurrent());
+  const size_t requested_channels = enable ? 2 : 1;
+  if (audio_parameters_.channels() == requested_channels) {
+    return true;
+  }
+  if (initialized_ && !recording_) {
+    // InitRecording() succeeded but StartRecording() hasn't been called yet.
+    // Java's stopRecording() asserts that its audio thread exists, so this
+    // state cannot be safely torn down from here without crashing. Decline
+    // instead of silently leaving audio_parameters_/AudioDeviceBuffer's
+    // channel count out of sync with the still-live, old-channel-count
+    // AudioRecord (InitRecording() would otherwise short-circuit on
+    // `initialized_` and never rebuild it).
+    RTC_LOG(LS_WARNING) << "Cannot change stereo mode while recording is "
+                           "initialized but not yet started; call "
+                           "StartRecording() or StopRecording() first";
+    return false;
+  }
+  // Snapshot before StopRecording() clears `recording_` as its last act.
+  const bool was_recording = recording_;
+  if (was_recording) {
+    StopRecording();
+  }
+  auto reconfigure_and_restart_if_needed = [&](size_t channels) {
+    audio_parameters_.reset(audio_parameters_.sample_rate(), channels,
+                            audio_parameters_.frames_per_buffer());
+    if (audio_device_buffer_) {
+      audio_device_buffer_->SetRecordingChannels(channels);
+    }
+    if (!was_recording) {
+      // Not currently recording: the new channel count takes effect on the
+      // next InitRecording() call.
+      return true;
+    }
+    return InitRecording() == 0 && StartRecording() == 0;
+  };
+  if (reconfigure_and_restart_if_needed(requested_channels)) {
+    return true;
+  }
+  if (!enable) {
+    RTC_LOG(LS_ERROR) << "Failed to restart recording after disabling stereo";
+    return false;
+  }
+  // The microphone likely doesn't support stereo capture. Fall back to mono
+  // and restart; the caller's stereo *mode* remains enabled regardless (see
+  // AudioDeviceModule::StereoModeEnabled()), only the achieved hardware
+  // channel count falls back. If this second attempt also fails, recording
+  // is left stopped; the caller has no way to distinguish that from a clean
+  // mono fallback from this return value alone.
+  RTC_LOG(LS_WARNING)
+      << "Stereo recording init failed, falling back to mono";
+  reconfigure_and_restart_if_needed(1);
+  return false;
+}
+
 void AudioRecordJni::CacheDirectBufferAddress(
     JNIEnv* env,
     const jni_zero::JavaParamRef<jobject>& j_caller,

@@ -57,6 +57,17 @@ class AudioInput {
   virtual std::optional<bool> BuiltInAECIsEnabled() const { return std::nullopt; }
   virtual std::optional<bool> BuiltInNSIsRequested() const { return std::nullopt; }
   virtual std::optional<bool> BuiltInNSIsEnabled() const { return std::nullopt; }
+
+  // Switches capture to stereo (enable=true) or mono (enable=false). If
+  // currently recording, this stops, reconfigures, and restarts recording.
+  // If not currently recording, the new channel count takes effect on the
+  // next InitRecording() call. Returns true if the requested channel count
+  // was actually achieved; when enable=true and the hardware does not
+  // support stereo capture, this falls back to mono and returns false --
+  // that is not an error, callers should still treat the call as having
+  // succeeded (see AudioDeviceModule::StereoModeEnabled(), which tracks the
+  // requested mode independently of the achieved channel count).
+  virtual bool SetStereoMode(bool enable) = 0;
 };
 
 class AudioOutput {
@@ -80,6 +91,11 @@ class AudioOutput {
   virtual std::optional<AudioDeviceModule::Stats> GetStats() const {
     return std::nullopt;
   }
+
+  // See AudioInput::SetStereoMode(). Stereo playout is supported by
+  // essentially all Android hardware, but the same stop/reconfigure/restart
+  // and fallback-to-mono-on-failure contract applies.
+  virtual bool SetStereoMode(bool enable) = 0;
 };
 
 // Extract an android.media.AudioManager from an android.content.Context.

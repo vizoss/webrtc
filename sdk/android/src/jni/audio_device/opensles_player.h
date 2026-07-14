@@ -84,6 +84,10 @@ class OpenSLESPlayer : public AudioOutput {
 
   int GetPlayoutUnderrunCount() override { return -1; }
 
+  // Stereo playout is not supported on the legacy OpenSL ES path. Always
+  // stays mono; returns false when `enable` is true.
+  bool SetStereoMode(bool enable) override;
+
  private:
   // These callback methods are called when data is required for playout.
   // They are both called from an internal "OpenSL ES thread" which is not

@@ -40,6 +40,22 @@ public interface AudioDeviceModule {
   void setMicrophoneMute(boolean mute);
 
   /**
+   * Enables or disables stereo mode: when enabled, capture/playout attempt to use real stereo
+   * hardware, falling back to mono (upmixed automatically further down the audio pipeline) when
+   * the hardware doesn't support it. Also drives automatic echo-cancellation disabling and SDP
+   * stereo negotiation. Returns false if the request could not be applied (e.g. this module isn't
+   * attached to a factory yet). Default implementation reports stereo mode as unsupported.
+   */
+  default boolean setStereoMode(boolean enable) {
+    return false;
+  }
+
+  /** Returns whether stereo mode is currently enabled (see {@link #setStereoMode}). */
+  default boolean isStereoModeEnabled() {
+    return false;
+  }
+
+  /**
    * Enable or disable built in noise suppressor. Returns true if the enabling was successful,
    * otherwise false is returned.
    */

@@ -225,7 +225,62 @@ int AudioTrackJni::GetPlayoutUnderrunCount() {
   return Java_WebRtcAudioTrack_GetPlayoutUnderrunCount(env_, j_audio_track_);
 }
 
-// TODO(henrika): possibly add stereo support.
+bool AudioTrackJni::SetStereoMode(bool enable) {
+  RTC_LOG(LS_INFO) << "SetStereoMode(" << enable << ")";
+  RTC_DCHECK(thread_checker_.IsCurrent());
+  const size_t requested_channels = enable ? 2 : 1;
+  if (audio_parameters_.channels() == requested_channels) {
+    return true;
+  }
+  if (initialized_ && !playing_) {
+    // InitPlayout() succeeded but StartPlayout() hasn't been called yet.
+    // Java's stopPlayout() asserts that its audio thread exists, so this
+    // state cannot be safely torn down from here without crashing. Decline
+    // instead of silently leaving audio_parameters_/AudioDeviceBuffer's
+    // channel count out of sync with the still-live, old-channel-count
+    // AudioTrack (InitPlayout() would otherwise short-circuit on
+    // `initialized_` and never rebuild it).
+    RTC_LOG(LS_WARNING) << "Cannot change stereo mode while playout is "
+                           "initialized but not yet started; call "
+                           "StartPlayout() or StopPlayout() first";
+    return false;
+  }
+  // Snapshot before StopPlayout() clears `playing_` as its last act.
+  const bool was_playing = playing_;
+  if (was_playing) {
+    StopPlayout();
+  }
+  auto reconfigure_and_restart_if_needed = [&](size_t channels) {
+    audio_parameters_.reset(audio_parameters_.sample_rate(), channels,
+                            audio_parameters_.frames_per_buffer());
+    if (audio_device_buffer_) {
+      audio_device_buffer_->SetPlayoutChannels(channels);
+    }
+    if (!was_playing) {
+      // Not currently playing: the new channel count takes effect on the
+      // next InitPlayout() call.
+      return true;
+    }
+    return InitPlayout() == 0 && StartPlayout() == 0;
+  };
+  if (reconfigure_and_restart_if_needed(requested_channels)) {
+    return true;
+  }
+  if (!enable) {
+    RTC_LOG(LS_ERROR) << "Failed to restart playout after disabling stereo";
+    return false;
+  }
+  // The output device likely doesn't support stereo playout (rare on
+  // Android). Fall back to mono and restart; the caller's stereo *mode*
+  // remains enabled regardless (see AudioDeviceModule::StereoModeEnabled()),
+  // only the achieved hardware channel count falls back. If this second
+  // attempt also fails, playout is left stopped; the caller has no way to
+  // distinguish that from a clean mono fallback from this return value alone.
+  RTC_LOG(LS_WARNING) << "Stereo playout init failed, falling back to mono";
+  reconfigure_and_restart_if_needed(1);
+  return false;
+}
+
 void AudioTrackJni::AttachAudioBuffer(AudioDeviceBuffer* audioBuffer) {
   RTC_LOG(LS_INFO) << "AttachAudioBuffer";
   RTC_DCHECK(thread_checker_.IsCurrent());

@@ -138,6 +138,16 @@ int AAudioRecorder::EnableBuiltInNS(bool enable) {
   return -1;
 }
 
+bool AAudioRecorder::SetStereoMode(bool enable) {
+  RTC_LOG(LS_INFO) << "SetStereoMode: " << enable;
+  if (!enable) {
+    // Always mono today, so "disable stereo" trivially succeeds.
+    return true;
+  }
+  RTC_LOG(LS_WARNING) << "Stereo capture is not supported on the AAudio path; staying mono";
+  return false;
+}
+
 void AAudioRecorder::OnErrorCallback(aaudio_result_t error) {
   RTC_LOG(LS_ERROR) << "OnErrorCallback: " << AAudio_convertResultToText(error);
   // RTC_DCHECK(thread_checker_aaudio_.IsCurrent());

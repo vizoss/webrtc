@@ -66,6 +66,10 @@ class AAudioRecorder : public AudioInput, public AAudioObserverInterface {
   int EnableBuiltInAEC(bool enable) override;
   int EnableBuiltInNS(bool enable) override;
 
+  // Stereo capture is not yet supported on the AAudio path. Always stays
+  // mono; returns false when `enable` is true.
+  bool SetStereoMode(bool enable) override;
+
  protected:
   // AAudioObserverInterface implementation.
 

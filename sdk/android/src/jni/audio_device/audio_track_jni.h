@@ -71,6 +71,8 @@ class AudioTrackJni : public AudioOutput {
   std::optional<uint32_t> MinSpeakerVolume() const override;
   int GetPlayoutUnderrunCount() override;
 
+  bool SetStereoMode(bool enable) override;
+
   void AttachAudioBuffer(AudioDeviceBuffer* audioBuffer) override;
 
   // Called from Java side so we can cache the address of the Java-manged
@@ -102,8 +104,9 @@ class AudioTrackJni : public AudioOutput {
   jni_zero::ScopedJavaGlobalRef<jobject> j_audio_track_;
 
   // Contains audio parameters provided to this class at construction by the
-  // AudioManager.
-  const AudioParameters audio_parameters_;
+  // AudioManager. Not const: SetStereoMode() rewrites the channel count in
+  // place so a subsequent InitPlayout() picks up the new value.
+  AudioParameters audio_parameters_;
 
   // Cached copy of address to direct audio buffer owned by `j_audio_track_`.
   void* direct_buffer_address_;

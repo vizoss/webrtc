@@ -491,6 +491,37 @@ public class JavaAudioDeviceModule implements AudioDeviceModule {
     audioInput.setMicrophoneMute(mute);
   }
 
+  /**
+   * Enables or disables stereo mode: when enabled, capture/playout attempt to use real stereo
+   * hardware, falling back to mono (upmixed automatically further down the audio pipeline) when
+   * the hardware doesn't support it. Also drives automatic echo-cancellation disabling and SDP
+   * stereo negotiation -- see {@code webrtc::AudioDeviceModule::SetStereoMode}. Must be called
+   * after this module has been passed to a {@code PeerConnectionFactory} (i.e. after {@link
+   * #getNative}). Returns false if the module hasn't been attached to a factory yet.
+   */
+  @Override
+  public boolean setStereoMode(boolean enable) {
+    Logging.d(TAG, "setStereoMode: " + enable);
+    synchronized (nativeLock) {
+      if (nativeAudioDeviceModule == 0) {
+        Logging.w(TAG, "setStereoMode called before this module was attached to a factory");
+        return false;
+      }
+      return nativeSetStereoMode(nativeAudioDeviceModule, enable);
+    }
+  }
+
+  /** Returns whether stereo mode is currently enabled (see {@link #setStereoMode}). */
+  @Override
+  public boolean isStereoModeEnabled() {
+    synchronized (nativeLock) {
+      if (nativeAudioDeviceModule == 0) {
+        return false;
+      }
+      return nativeIsStereoModeEnabled(nativeAudioDeviceModule);
+    }
+  }
+
   public void setAudioRecordEnabled(boolean enable) {
     audioInput.setUseAudioRecord(enable);
   }
@@ -553,4 +584,6 @@ public class JavaAudioDeviceModule implements AudioDeviceModule {
       AudioManager audioManager, WebRtcAudioRecord audioInput, WebRtcAudioTrack audioOutput,
       long webrtcEnvRef, int inputSampleRate, int outputSampleRate, boolean useStereoInput,
       boolean useStereoOutput);
+  private static native boolean nativeSetStereoMode(long nativeAudioDeviceModule, boolean enable);
+  private static native boolean nativeIsStereoModeEnabled(long nativeAudioDeviceModule);
 }
