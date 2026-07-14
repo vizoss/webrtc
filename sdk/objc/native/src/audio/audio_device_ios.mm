@@ -14,6 +14,7 @@
 #include "audio_device_ios.h"
 
 #include <mach/mach_time.h>
+#include <algorithm>
 #include <cmath>
 
 #include "api/array_view.h"
@@ -431,8 +432,11 @@ OSStatus AudioDeviceIOS::OnDeliverRecordedData(
   // Set the size of our own audio buffer and clear it first to avoid copying
   // in combination with potential reallocations.
   // On real iOS devices, the size will only be set once (at first callback).
+  // The buffer is interleaved, so its total sample count is
+  // num_frames * channels, not just num_frames (which would only be correct
+  // for mono).
   record_audio_buffer_.Clear();
-  record_audio_buffer_.SetSize(num_frames);
+  record_audio_buffer_.SetSize(num_frames * record_parameters_.channels());
 
   // Get audio timestamp for the audio.
   // The timestamp will not have NTP time epoch, but that will be addressed by
@@ -485,10 +489,12 @@ OSStatus AudioDeviceIOS::OnGetPlayoutData(AudioUnitRenderActionFlags* flags,
                                           UInt32 num_frames,
                                           AudioBufferList* io_data) {
   RTC_DCHECK_RUN_ON(&io_thread_checker_);
-  // Verify 16-bit, noninterleaved mono PCM signal format.
+  // Verify 16-bit interleaved PCM signal format (the ASBD has no
+  // non-interleaved flag set, so 1 buffer holds all channels regardless of
+  // channel count; see VoiceProcessingAudioUnit::GetFormat()).
   RTC_DCHECK_EQ(1, io_data->mNumberBuffers);
   AudioBuffer* audio_buffer = &io_data->mBuffers[0];
-  RTC_DCHECK_EQ(1, audio_buffer->mNumberChannels);
+  RTC_DCHECK_EQ(playout_parameters_.channels(), audio_buffer->mNumberChannels);
 
   // Produce silence and give audio unit a hint about it if playout is not
   // activated.
@@ -551,10 +557,12 @@ OSStatus AudioDeviceIOS::OnGetPlayoutData(AudioUnitRenderActionFlags* flags,
 
   // Read decoded 16-bit PCM samples from WebRTC (using a size that matches
   // the native I/O audio unit) and copy the result to the audio buffer in the
-  // `io_data` destination.
+  // `io_data` destination. The destination buffer is interleaved, so its
+  // total sample count is num_frames * channels, not just num_frames (which
+  // would only be correct for mono).
   fine_audio_buffer_->GetPlayoutData(
       webrtc::ArrayView<int16_t>(static_cast<int16_t*>(audio_buffer->mData),
-                                 num_frames),
+                                 num_frames * audio_buffer->mNumberChannels),
       playout_delay_ms);
 
   last_hw_output_latency_update_sample_count_ += num_frames;
@@ -700,7 +708,8 @@ void AudioDeviceIOS::HandleSampleRateChange() {
   SetupAudioBuffersForActiveAudioSession();
 
   // Initialize the audio unit again with the new sample rate.
-  if (!audio_unit_->Initialize(playout_parameters_.sample_rate(), recording_is_initialized_)) {
+  if (!audio_unit_->Initialize(playout_parameters_.sample_rate(), playout_parameters_.channels(),
+                               recording_is_initialized_)) {
     RTCLogError(@"Failed to initialize the audio unit with sample rate: %d",
                 playout_parameters_.sample_rate());
     return;
@@ -782,10 +791,12 @@ bool AudioDeviceIOS::RestartAudioUnit(bool enable_input) {
     audio_unit_->Uninitialize();
   }
 
-  // Initialize the audio unit again with the same sample rate.
+  // Initialize the audio unit again with the same sample rate. Also re-reads
+  // the channel count, which SetStereoMode() may have just updated.
   const double sample_rate = playout_parameters_.sample_rate();
+  const size_t channels = playout_parameters_.channels();
 
-  if (!audio_unit_->Initialize(sample_rate, enable_input)) {
+  if (!audio_unit_->Initialize(sample_rate, channels, enable_input)) {
     RTCLogError(@"Failed to initialize the audio unit with sample rate: %f", sample_rate);
     return false;
   }
@@ -807,8 +818,10 @@ void AudioDeviceIOS::UpdateAudioDeviceBuffer() {
   RTC_DCHECK(audio_device_buffer_) << "AttachAudioBuffer must be called first";
   RTC_DCHECK_GT(playout_parameters_.sample_rate(), 0);
   RTC_DCHECK_GT(record_parameters_.sample_rate(), 0);
-  RTC_DCHECK_EQ(playout_parameters_.channels(), 1);
-  RTC_DCHECK_EQ(record_parameters_.channels(), 1);
+  // The VoiceProcessingIO unit uses a single shared ASBD for both scopes
+  // (see VoiceProcessingAudioUnit::GetFormat()), so these must always match.
+  RTC_DCHECK_EQ(playout_parameters_.channels(), record_parameters_.channels());
+  RTC_DCHECK(playout_parameters_.channels() == 1 || playout_parameters_.channels() == 2);
   // Inform the audio device buffer (ADB) about the new audio format.
   audio_device_buffer_->SetPlayoutSampleRate(playout_parameters_.sample_rate());
   audio_device_buffer_->SetPlayoutChannels(playout_parameters_.channels());
@@ -848,16 +861,35 @@ void AudioDeviceIOS::SetupAudioBuffersForActiveAudioSession() {
     sample_rate = playout_parameters_.sample_rate();
   }
 
+  // The preferred channel count set via SetStereoMode() is only a hint to
+  // the OS; the actual granted channel count may be lower (e.g. a mono-only
+  // microphone). Clamp to what the now-active session actually reports.
+  // Both scopes share a single ASBD (see VoiceProcessingAudioUnit::GetFormat()),
+  // so a single achieved value is used for both.
+  const size_t requested_channels = playout_parameters_.channels();
+  size_t achieved_channels = requested_channels;
+  if (session.inputNumberOfChannels > 0) {
+    achieved_channels = std::min(
+        achieved_channels, static_cast<size_t>(session.inputNumberOfChannels));
+  }
+  if (session.outputNumberOfChannels > 0) {
+    achieved_channels = std::min(
+        achieved_channels, static_cast<size_t>(session.outputNumberOfChannels));
+  }
+  if (achieved_channels != requested_channels) {
+    RTC_LOG(LS_WARNING) << "Requested " << requested_channels
+                        << " channel(s) but the audio session only granted "
+                        << achieved_channels << "; falling back.";
+  }
+
   // At this stage, we also know the exact IO buffer duration and can add
   // that info to the existing audio parameters where it is converted into
   // number of audio frames.
   // Example: IO buffer size = 0.008 seconds <=> 128 audio frames at 16kHz.
   // Hence, 128 is the size we expect to see in upcoming render callbacks.
-  playout_parameters_.reset(
-      sample_rate, playout_parameters_.channels(), io_buffer_duration);
+  playout_parameters_.reset(sample_rate, achieved_channels, io_buffer_duration);
   RTC_DCHECK(playout_parameters_.is_complete());
-  record_parameters_.reset(
-      sample_rate, record_parameters_.channels(), io_buffer_duration);
+  record_parameters_.reset(sample_rate, achieved_channels, io_buffer_duration);
   RTC_DCHECK(record_parameters_.is_complete());
   RTC_LOG(LS_INFO) << " frames per I/O buffer: "
                    << playout_parameters_.frames_per_buffer();
@@ -945,7 +977,8 @@ void AudioDeviceIOS::UpdateAudioUnit(bool can_play_or_record) {
     RTCLog(@"Initializing audio unit for UpdateAudioUnit");
     ConfigureAudioSession();
     SetupAudioBuffersForActiveAudioSession();
-    if (!audio_unit_->Initialize(playout_parameters_.sample_rate(), recording_is_initialized_)) {
+    if (!audio_unit_->Initialize(playout_parameters_.sample_rate(), playout_parameters_.channels(),
+                                 recording_is_initialized_)) {
       RTCLogError(@"Failed to initialize audio unit.");
       return;
     }
@@ -1077,7 +1110,8 @@ bool AudioDeviceIOS::InitPlayOrRecord(bool enable_input) {
       return false;
     }
     SetupAudioBuffersForActiveAudioSession();
-    audio_unit_->Initialize(playout_parameters_.sample_rate(), enable_input);
+    audio_unit_->Initialize(playout_parameters_.sample_rate(), playout_parameters_.channels(),
+                            enable_input);
   }
 
   // Release the lock.
@@ -1235,33 +1269,88 @@ int32_t AudioDeviceIOS::MicrophoneMute(bool& enabled) const {
 }
 
 int32_t AudioDeviceIOS::StereoRecordingIsAvailable(bool& available) {
-  available = false;
+  RTC_DCHECK_RUN_ON(thread_);
+  RTC_OBJC_TYPE(RTCAudioSession)* session =
+      [RTC_OBJC_TYPE(RTCAudioSession) sharedInstance];
+  available = session.maximumInputNumberOfChannels >= 2;
   return 0;
 }
 
 int32_t AudioDeviceIOS::SetStereoRecording(bool enable) {
-  RTC_LOG_F(LS_WARNING) << "Not implemented";
-  return -1;
+  RTC_DCHECK_RUN_ON(thread_);
+  // The VoiceProcessingIO unit uses a single shared ASBD for both scopes (see
+  // VoiceProcessingAudioUnit::GetFormat()), so recording and playout channel
+  // counts cannot be set independently on this path; this enables/disables
+  // stereo for both directions together. See SetStereoMode().
+  return SetStereoMode(enable);
 }
 
 int32_t AudioDeviceIOS::StereoRecording(bool& enabled) const {
-  enabled = false;
+  RTC_DCHECK_RUN_ON(thread_);
+  enabled = record_parameters_.channels() == 2;
   return 0;
 }
 
 int32_t AudioDeviceIOS::StereoPlayoutIsAvailable(bool& available) {
-  available = false;
+  RTC_DCHECK_RUN_ON(thread_);
+  RTC_OBJC_TYPE(RTCAudioSession)* session =
+      [RTC_OBJC_TYPE(RTCAudioSession) sharedInstance];
+  available = session.maximumOutputNumberOfChannels >= 2;
   return 0;
 }
 
 int32_t AudioDeviceIOS::SetStereoPlayout(bool enable) {
-  RTC_LOG_F(LS_WARNING) << "Not implemented";
-  return -1;
+  RTC_DCHECK_RUN_ON(thread_);
+  // See SetStereoRecording() -- both directions are coupled on this path.
+  return SetStereoMode(enable);
 }
 
 int32_t AudioDeviceIOS::StereoPlayout(bool& enabled) const {
-  enabled = false;
+  RTC_DCHECK_RUN_ON(thread_);
+  enabled = playout_parameters_.channels() == 2;
   return 0;
+}
+
+int32_t AudioDeviceIOS::SetStereoMode(bool enable) {
+  RTC_DCHECK_RUN_ON(thread_);
+  RTCLog(@"SetStereoMode: %d", enable);
+  const NSInteger requested_channels = enable ? 2 : 1;
+
+  RTC_OBJC_TYPE(RTCAudioSession)* session =
+      [RTC_OBJC_TYPE(RTCAudioSession) sharedInstance];
+  [session lockForConfiguration];
+  NSError* error = nil;
+  if (![session setPreferredInputNumberOfChannels:requested_channels error:&error]) {
+    RTCLogWarning(@"Failed to set preferred input channels: %@",
+                  error.localizedDescription);
+  }
+  error = nil;
+  if (![session setPreferredOutputNumberOfChannels:requested_channels error:&error]) {
+    RTCLogWarning(@"Failed to set preferred output channels: %@",
+                  error.localizedDescription);
+  }
+  // Read back what the OS can grant right now with the session in its
+  // current state; SetupAudioBuffersForActiveAudioSession() re-clamps again
+  // once the session is next (re)activated, since availability can change.
+  NSInteger achieved_channels = requested_channels;
+  if (session.inputNumberOfChannels > 0) {
+    achieved_channels = std::min(achieved_channels, session.inputNumberOfChannels);
+  }
+  if (session.outputNumberOfChannels > 0) {
+    achieved_channels = std::min(achieved_channels, session.outputNumberOfChannels);
+  }
+  [session unlockForConfiguration];
+
+  playout_parameters_.reset(playout_parameters_.sample_rate(), achieved_channels);
+  record_parameters_.reset(record_parameters_.sample_rate(), achieved_channels);
+  UpdateAudioDeviceBuffer();
+
+  if (!audio_unit_) {
+    // No audio unit yet; the new channel count takes effect the next time
+    // InitPlayOrRecord() creates and initializes one.
+    return 0;
+  }
+  return RestartAudioUnit(recording_is_initialized_) ? 0 : -1;
 }
 
 int32_t AudioDeviceIOS::MicrophoneVolumeIsAvailable(bool& available) {

@@ -80,7 +80,12 @@ static RTC_OBJC_TYPE(RTCAudioSessionConfiguration) *gWebRTCConfiguration = nil;
     // We try to use mono in both directions to save resources and format
     // conversions in the audio unit. Some devices does only support stereo;
     // e.g. wired headset on iPhone 6.
-    // TODO(henrika): add support for stereo if needed.
+    // Stereo mode is supported at runtime via
+    // AudioDeviceModule::SetStereoMode(), implemented by AudioDeviceIOS
+    // (sdk/objc/native/src/audio/audio_device_ios.mm) and AudioEngineDevice
+    // (modules/audio_device/audio_engine_device.mm). Both bypass this
+    // singleton and talk to RTCAudioSession's preferred-channel-count
+    // properties directly, so this default stays mono.
     _inputNumberOfChannels = RTC_CONSTANT_TYPE(RTCAudioSessionPreferredNumberOfChannels);
     _outputNumberOfChannels = RTC_CONSTANT_TYPE(RTCAudioSessionPreferredNumberOfChannels);
   }

@@ -151,6 +151,16 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
   int32_t SetStereoRecording(bool enable) override;
   int32_t StereoRecording(bool& enabled) const override;
 
+  // Single global toggle: the VoiceProcessingIO unit uses a single shared
+  // ASBD for both scopes (see VoiceProcessingAudioUnit::GetFormat()), so
+  // SetStereoRecording()/SetStereoPlayout() both forward here. Not an
+  // override of AudioDeviceGeneric (which has no such combined concept);
+  // called directly by AudioDeviceModuleIOS, which owns this class
+  // concretely. Pushes the preferred channel count to the audio session,
+  // clamps to what's actually available, and restarts the audio unit (if one
+  // exists) with the new channel count.
+  int32_t SetStereoMode(bool enable);
+
   // AudioSessionObserver methods. May be called from any thread.
   void OnInterruptionBegin() override;
   void OnInterruptionEnd(bool should_resume) override;

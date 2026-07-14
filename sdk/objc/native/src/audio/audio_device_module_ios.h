@@ -11,6 +11,7 @@
 #ifndef SDK_OBJC_NATIVE_SRC_AUDIO_AUDIO_DEVICE_MODULE_IOS_H_
 #define SDK_OBJC_NATIVE_SRC_AUDIO_AUDIO_DEVICE_MODULE_IOS_H_
 
+#include <atomic>
 #include <memory>
 
 #include "api/audio/audio_device.h"
@@ -117,6 +118,13 @@ class AudioDeviceModuleIOS : public AudioDeviceModule {
   int32_t SetStereoRecording(bool enable) override;
   int32_t StereoRecording(bool* enabled) const override;
 
+  // Single global toggle: forwards to the shared AudioDeviceIOS::SetStereoMode()
+  // (recording and playout channels cannot be set independently on this
+  // path, since the underlying VoiceProcessingIO unit uses a single shared
+  // ASBD for both scopes).
+  int32_t SetStereoMode(bool enable) override;
+  bool StereoModeEnabled() const override;
+
   // Delay information and control
   int32_t PlayoutDelay(uint16_t* delayMS) const override;
 
@@ -148,6 +156,12 @@ class AudioDeviceModuleIOS : public AudioDeviceModule {
   bool initialized_ = false;
   std::unique_ptr<AudioDeviceIOS> audio_device_;
   std::unique_ptr<AudioDeviceBuffer> audio_device_buffer_;
+
+  // Set from SetStereoMode(), which runs on the same thread as other control
+  // calls. Read from StereoModeEnabled(), which per the AudioDeviceModule
+  // interface contract must be safe to call from any thread (e.g. the
+  // signaling thread, while building SDP offers/answers), hence the atomic.
+  std::atomic<bool> stereo_mode_enabled_{false};
 };
 }  // namespace ios_adm
 }  // namespace webrtc

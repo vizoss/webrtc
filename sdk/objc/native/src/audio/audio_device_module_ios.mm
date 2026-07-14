@@ -344,11 +344,16 @@ int32_t AudioDeviceModuleIOS::StereoRecordingIsAvailable(
 int32_t AudioDeviceModuleIOS::SetStereoRecording(bool enable) {
   RTC_DLOG(LS_INFO) << __FUNCTION__ << "(" << enable << ")";
   CHECKinitialized_();
-  if (enable) {
-    RTC_LOG(LS_WARNING) << "recording in stereo is not supported";
+  if (audio_device_->SetStereoRecording(enable) != 0) {
+    RTC_LOG(LS_WARNING) << "stereo recording is not supported";
+    ReportError(kStereoRecordingFailed);
+    return -1;
   }
-  ReportError(kStereoRecordingFailed);
-  return -1;
+  // Recording and playout are coupled on this path (see
+  // AudioDeviceIOS::SetStereoRecording()), so this call affects the same
+  // combined state SetStereoMode() tracks.
+  stereo_mode_enabled_.store(enable);
+  return 0;
 }
 
 int32_t AudioDeviceModuleIOS::StereoRecording(bool* enabled) const {
@@ -380,22 +385,22 @@ int32_t AudioDeviceModuleIOS::StereoPlayoutIsAvailable(bool* available) const {
 int32_t AudioDeviceModuleIOS::SetStereoPlayout(bool enable) {
   RTC_DLOG(LS_INFO) << __FUNCTION__ << "(" << enable << ")";
   CHECKinitialized_();
-  if (audio_device_->PlayoutIsInitialized()) {
-    RTC_LOG(LS_ERROR)
-        << "unable to set stereo mode while playing side is initialized";
-    ReportError(kStereoPlayoutFailed);
-    return -1;
-  }
-  if (audio_device_->SetStereoPlayout(enable)) {
+  // AudioDeviceIOS::SetStereoPlayout() (via SetStereoMode()) already stops,
+  // reconfigures, and restarts the audio unit as needed, and updates the
+  // audio device buffer's channel count to the achieved (possibly
+  // hardware-clamped) value via UpdateAudioDeviceBuffer() -- so unlike the
+  // old stub this no longer rejects being called while playout is
+  // initialized, and no longer separately (and incorrectly, ignoring
+  // hardware clamping) pokes SetPlayoutChannels() here.
+  if (audio_device_->SetStereoPlayout(enable) != 0) {
     RTC_LOG(LS_WARNING) << "stereo playout is not supported";
     ReportError(kStereoPlayoutFailed);
     return -1;
   }
-  int8_t nChannels(1);
-  if (enable) {
-    nChannels = 2;
-  }
-  audio_device_buffer_.get()->SetPlayoutChannels(nChannels);
+  // Recording and playout are coupled on this path (see
+  // AudioDeviceIOS::SetStereoPlayout()), so this call affects the same
+  // combined state SetStereoMode() tracks.
+  stereo_mode_enabled_.store(enable);
   return 0;
 }
 
@@ -410,6 +415,26 @@ int32_t AudioDeviceModuleIOS::StereoPlayout(bool* enabled) const {
   *enabled = stereo;
   RTC_DLOG(LS_INFO) << "output: " << stereo;
   return 0;
+}
+
+int32_t AudioDeviceModuleIOS::SetStereoMode(bool enable) {
+  RTC_DLOG(LS_INFO) << __FUNCTION__ << "(" << enable << ")";
+  CHECKinitialized_();
+  // Both directions are coupled on this path (see AudioDeviceIOS::SetStereoMode()),
+  // so either individual setter would do the same thing; call the combined
+  // entry point directly for clarity.
+  int32_t result = audio_device_->SetStereoMode(enable);
+  if (result != 0) {
+    RTC_LOG(LS_WARNING) << "stereo mode is not supported";
+    ReportError(kStereoPlayoutFailed);
+    return -1;
+  }
+  stereo_mode_enabled_.store(enable);
+  return 0;
+}
+
+bool AudioDeviceModuleIOS::StereoModeEnabled() const {
+  return stereo_mode_enabled_.load();
 }
 
 int32_t AudioDeviceModuleIOS::PlayoutIsAvailable(bool* available) {

@@ -212,12 +212,13 @@ VoiceProcessingAudioUnit::State VoiceProcessingAudioUnit::GetState() const {
   return state_;
 }
 
-bool VoiceProcessingAudioUnit::Initialize(Float64 sample_rate, bool enable_input) {
+bool VoiceProcessingAudioUnit::Initialize(Float64 sample_rate, size_t channels, bool enable_input) {
   RTC_DCHECK_GE(state_, kUninitialized);
-  RTCLog(@"Initializing audio unit with sample rate: %f", sample_rate);
+  RTC_DCHECK(channels == 1 || channels == 2);
+  RTCLog(@"Initializing audio unit with sample rate: %f, channels: %zu", sample_rate, channels);
 
   OSStatus result = noErr;
-  AudioStreamBasicDescription format = GetFormat(sample_rate);
+  AudioStreamBasicDescription format = GetFormat(sample_rate, channels);
   UInt32 size = sizeof(format);
 #if !defined(NDEBUG)
   LogStreamDescription(format);
@@ -537,22 +538,26 @@ OSStatus VoiceProcessingAudioUnit::NotifyDeliverRecordedData(
 }
 
 AudioStreamBasicDescription VoiceProcessingAudioUnit::GetFormat(
-    Float64 sample_rate) const {
+    Float64 sample_rate, size_t channels) const {
   // Set the application formats for input and output:
   // - use same format in both directions
   // - avoid resampling in the I/O unit by using the hardware sample rate
   // - linear PCM => noncompressed audio data format with one frame per packet
-  // - no need to specify interleaving since only mono is supported
+  // - no explicit non-interleaved flag is set below, so this format is
+  //   interleaved (the Core Audio ASBD default); with 2 channels each frame
+  //   is one interleaved L/R int16 pair, hence mBytesPerFrame/mBytesPerPacket
+  //   scale with the channel count while mBitsPerChannel does not.
   AudioStreamBasicDescription format;
-  RTC_DCHECK_EQ(1, RTC_CONSTANT_TYPE(RTCAudioSessionPreferredNumberOfChannels));
+  RTC_DCHECK(channels == 1 || channels == 2);
+  const UInt32 bytes_per_frame = kBytesPerSample * static_cast<UInt32>(channels);
   format.mSampleRate = sample_rate;
   format.mFormatID = kAudioFormatLinearPCM;
   format.mFormatFlags =
       kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked;
-  format.mBytesPerPacket = kBytesPerSample;
+  format.mBytesPerPacket = bytes_per_frame;
   format.mFramesPerPacket = 1;  // uncompressed.
-  format.mBytesPerFrame = kBytesPerSample;
-  format.mChannelsPerFrame = RTC_CONSTANT_TYPE(RTCAudioSessionPreferredNumberOfChannels);
+  format.mBytesPerFrame = bytes_per_frame;
+  format.mChannelsPerFrame = static_cast<UInt32>(channels);
   format.mBitsPerChannel = 8 * kBytesPerSample;
   return format;
 }

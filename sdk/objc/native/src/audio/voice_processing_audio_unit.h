@@ -13,6 +13,8 @@
 
 #include <AudioUnit/AudioUnit.h>
 
+#include <cstddef>
+
 namespace webrtc {
 namespace ios_adm {
 
@@ -80,8 +82,10 @@ class VoiceProcessingAudioUnit {
 
   VoiceProcessingAudioUnit::State GetState() const;
 
-  // Initializes the underlying audio unit with the given sample rate.
-  bool Initialize(Float64 sample_rate, bool enable_input);
+  // Initializes the underlying audio unit with the given sample rate and
+  // channel count (1 or 2; the same format is used on both the input and
+  // output scopes, see GetFormat()).
+  bool Initialize(Float64 sample_rate, size_t channels, bool enable_input);
 
   // Starts the underlying audio unit.
   OSStatus Start();
@@ -132,9 +136,9 @@ class VoiceProcessingAudioUnit {
                                      UInt32 num_frames,
                                      AudioBufferList* io_data);
 
-  // Returns the predetermined format with a specific sample rate. See
-  // implementation file for details on format.
-  AudioStreamBasicDescription GetFormat(Float64 sample_rate) const;
+  // Returns the predetermined format with a specific sample rate and channel
+  // count (1 or 2). See implementation file for details on format.
+  AudioStreamBasicDescription GetFormat(Float64 sample_rate, size_t channels) const;
 
   // Deletes the underlying audio unit.
   void DisposeAudioUnit();
