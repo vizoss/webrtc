@@ -282,6 +282,13 @@ RTC_OBJC_EXPORT
 /// when the ADM can query the effect.
 @property(nonatomic, readonly) RTC_OBJC_TYPE(RTCPlatformAudioProcessingState) *platformAudioProcessingState;
 
+/// Enables or disables stereo mode: when enabled, capture/playout attempt to use real stereo
+/// hardware, falling back to mono (upmixed automatically further down the audio pipeline) when
+/// the hardware doesn't support it. Also drives automatic echo-cancellation disabling and SDP
+/// stereo negotiation. Defaults to false. Supported by both RTCAudioDeviceModuleType values (this
+/// property lives on the base ADM interface, unlike the AudioEngine-only properties above).
+@property(nonatomic, assign, getter=isStereoModeEnabled) BOOL stereoModeEnabled;
+
 @end
 
 NS_ASSUME_NONNULL_END

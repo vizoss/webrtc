@@ -470,6 +470,19 @@ class AudioDeviceObserver : public webrtc::AudioDeviceObserver {
   });
 }
 
+// Lives on the base webrtc::AudioDeviceModule interface (unlike the
+// AudioEngine-only properties above), so this works for both
+// RTCAudioDeviceModuleType values without an AudioEngineDeviceOrNull() cast.
+- (BOOL)isStereoModeEnabled {
+  webrtc::AudioDeviceModule *module = _native.get();
+  return _workerThread->BlockingCall([module] { return module->StereoModeEnabled(); });
+}
+
+- (void)setStereoModeEnabled:(BOOL)enabled {
+  webrtc::AudioDeviceModule *module = _native.get();
+  _workerThread->BlockingCall([module, enabled] { return module->SetStereoMode(enabled) == 0; });
+}
+
 - (BOOL)isRecordingAlwaysPreparedMode {
   webrtc::AudioEngineDevice *module =
       AudioEngineDeviceOrNull(_native.get(), _audioDeviceModuleType);
