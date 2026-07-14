@@ -627,6 +627,7 @@ std::optional<AudioDeviceModule::Stats> FakeVoiceEngine::GetAudioDeviceStats() {
   return std::nullopt;
 }
 AudioProcessingState FakeVoiceEngine::GetAudioProcessingState() { return {}; }
+bool FakeVoiceEngine::IsStereoModeEnabled() const { return false; }
 void FakeVoiceEngine::StopAecDump() {}
 
 std::vector<RtpHeaderExtensionCapability>

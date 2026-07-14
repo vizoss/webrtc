@@ -203,6 +203,25 @@ class AudioDeviceModule : public RefCountInterface {
   virtual int32_t SetStereoRecording(bool enable) = 0;
   virtual int32_t StereoRecording(bool* enabled) const = 0;
 
+  // Single global toggle for "stereo mode": when supported and enabled, the
+  // ADM attempts to capture and play out in stereo, falling back to mono
+  // capture/playout when the hardware doesn't support it (the audio pipeline
+  // upmixes mono to stereo automatically further downstream). This is the
+  // single source of truth consulted to auto-disable echo cancellation and to
+  // declare `stereo=1`/`sprop-stereo=1` in outgoing SDP. Unsupported ADMs
+  // return -1 from SetStereoMode and report false from StereoModeEnabled.
+  // Implementations should apply a change immediately: stop recording/playout
+  // if active, reconfigure, and restart if it was running.
+  //
+  // SetStereoMode must only be called on the ADM's own control thread (same
+  // as other control calls). StereoModeEnabled, unlike most other getters on
+  // this interface, must be safe to call from any thread without additional
+  // synchronization from the caller (e.g. store the flag in a std::atomic<bool>),
+  // because it is read from the signaling thread while building SDP offers/
+  // answers, which may differ from the ADM's own thread.
+  virtual int32_t SetStereoMode(bool enable) { return -1; }
+  virtual bool StereoModeEnabled() const { return false; }
+
   // Playout delay
   virtual int32_t PlayoutDelay(uint16_t* delayMS) const = 0;
 

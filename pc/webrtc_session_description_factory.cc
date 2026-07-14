@@ -29,6 +29,7 @@
 #include "api/rtc_error.h"
 #include "api/scoped_refptr.h"
 #include "api/sequence_checker.h"
+#include "media/base/media_constants.h"
 #include "pc/codec_vendor.h"
 #include "pc/connection_context.h"
 #include "pc/media_options.h"
@@ -113,7 +114,8 @@ WebRtcSessionDescriptionFactory::WebRtcSessionDescriptionFactory(
         on_certificate_ready,
     CodecLookupHelper* codec_lookup_helper,
     const Environment& env)
-    : signaling_thread_(context->signaling_thread()),
+    : context_(context),
+      signaling_thread_(context->signaling_thread()),
       transport_desc_factory_(env.field_trials()),
       session_desc_factory_(env,
                             context->media_engine(),
@@ -263,6 +265,30 @@ void WebRtcSessionDescriptionFactory::CreateAnswer(
   }
 }
 
+void WebRtcSessionDescriptionFactory::ApplyStereoModeToDescription(
+    SessionDescription* description) const {
+  if (!context_ || !context_->media_engine() ||
+      !context_->media_engine()->voice().IsStereoModeEnabled()) {
+    return;
+  }
+  for (ContentInfo& content : description->contents()) {
+    AudioContentDescription* audio_description =
+        content.media_description() ? content.media_description()->as_audio()
+                                    : nullptr;
+    if (!audio_description) {
+      continue;
+    }
+    std::vector<Codec> codecs = audio_description->codecs();
+    for (Codec& codec : codecs) {
+      if (codec.name == kOpusCodecName) {
+        codec.SetParam(kCodecParamStereo, "1");
+        codec.SetParam(kCodecParamSPropStereo, "1");
+      }
+    }
+    audio_description->set_codecs(codecs);
+  }
+}
+
 void WebRtcSessionDescriptionFactory::InternalCreateOffer(
     CreateSessionDescriptionRequest request) {
   if (sdp_info_->local_description()) {
@@ -286,6 +312,7 @@ void WebRtcSessionDescriptionFactory::InternalCreateOffer(
   }
   std::unique_ptr<SessionDescription> desc = std::move(result.value());
   RTC_CHECK(desc);
+  ApplyStereoModeToDescription(desc.get());
 
   // RFC 3264
   // When issuing an offer that modifies the session,
@@ -347,6 +374,7 @@ void WebRtcSessionDescriptionFactory::InternalCreateAnswer(
   }
   std::unique_ptr<SessionDescription> desc = std::move(result.value());
   RTC_CHECK(desc);
+  ApplyStereoModeToDescription(desc.get());
 
   // RFC 3264
   // If the answer is different from the offer in any way (different IP

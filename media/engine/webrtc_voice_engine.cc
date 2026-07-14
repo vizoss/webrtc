@@ -725,6 +725,14 @@ WebRtcVoiceEngine::GetAudioDeviceStats() {
   return adm()->GetStats();
 }
 
+bool WebRtcVoiceEngine::IsStereoModeEnabled() const {
+  // Callable from any thread: `adm_` is const (never reassigned after
+  // construction), copying its refcount is atomic, and
+  // `AudioDeviceModule::StereoModeEnabled()` is required to be safe to read
+  // cross-thread, unlike most other ADM control calls.
+  return adm_ && adm_->StereoModeEnabled();
+}
+
 AudioDeviceModule* WebRtcVoiceEngine::adm() {
   RTC_DCHECK_RUN_ON(&worker_thread_checker_);
   RTC_DCHECK(adm_);

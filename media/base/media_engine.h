@@ -143,6 +143,12 @@ class VoiceEngineInterface : public RtpHeaderExtensionQueryInterface {
   virtual std::optional<AudioDeviceModule::Stats> GetAudioDeviceStats() = 0;
 
   virtual AudioProcessingState GetAudioProcessingState() = 0;
+
+  // Whether the backing AudioDeviceModule has stereo mode enabled (false if
+  // there is no ADM). Used by layers that only have access to the media
+  // engine, such as SDP generation, without exposing the whole ADM interface
+  // to them.
+  virtual bool IsStereoModeEnabled() const = 0;
 };
 
 class VideoEngineInterface : public RtpHeaderExtensionQueryInterface {

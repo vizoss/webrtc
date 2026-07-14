@@ -816,6 +816,7 @@ class FakeVoiceEngine : public VoiceEngineInterface {
   void StopAecDump() override;
   std::optional<AudioDeviceModule::Stats> GetAudioDeviceStats() override;
   AudioProcessingState GetAudioProcessingState() override;
+  bool IsStereoModeEnabled() const override;
   std::vector<RtpHeaderExtensionCapability> GetRtpHeaderExtensions(
       const FieldTrialsView* field_trials) const override;
   void SetRtpHeaderExtensions(

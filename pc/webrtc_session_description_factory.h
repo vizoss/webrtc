@@ -133,8 +133,19 @@ class WebRtcSessionDescriptionFactory {
   void OnCertificateRequestFailed();
   void SetCertificate(scoped_refptr<RTCCertificate> certificate);
 
+  // Rewrites the opus codec's fmtp in `description`'s audio content to add
+  // `stereo=1;sprop-stereo=1` when the ADM backing `context_`'s media engine
+  // has stereo mode enabled. A no-op when there is no ADM, or when it does not
+  // have stereo mode enabled, or when there is no audio content. Runs inside
+  // InternalCreateOffer/InternalCreateAnswer, before the description is handed
+  // back to the caller, so a freshly-regenerated comparison copy (as used by
+  // the SDP munging detector) is produced by the same code path and includes
+  // the same rewrite -- it will not be flagged as caller-side munging.
+  void ApplyStereoModeToDescription(SessionDescription* description) const;
+
   std::queue<CreateSessionDescriptionRequest>
       create_session_description_requests_;
+  ConnectionContext* const context_;
   TaskQueueBase* const signaling_thread_;
   TransportDescriptionFactory transport_desc_factory_;
   MediaSessionDescriptionFactory session_desc_factory_;

@@ -92,6 +92,7 @@ class MostlyMockVoiceEngineInterface : public VoiceEngineInterface {
               (),
               (override));
   MOCK_METHOD(AudioProcessingState, GetAudioProcessingState, (), (override));
+  MOCK_METHOD(bool, IsStereoModeEnabled, (), (const, override));
 };
 
 }  // namespace webrtc

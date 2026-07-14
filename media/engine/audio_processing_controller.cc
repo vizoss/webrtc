@@ -317,7 +317,33 @@ AudioProcessingOptionsResult ValidateAudioProcessingOptionsForApply(AudioDeviceM
 }
 
 AudioProcessingApplyResult ApplyAudioProcessingOptions(AudioProcessing *apm, AudioDeviceModule *adm,
-                                                       const AudioOptions &options_in) {
+                                                       const AudioOptions &options_in_param) {
+  // Stereo mode forces echo cancellation off on every call while it is
+  // enabled, regardless of what the caller requested (including turning an
+  // unset/"leave as-is" request into an explicit disable): AEC's correlation
+  // analysis between mic and render reference assumes mono semantics that a
+  // (possibly mono-duplicated) stereo signal breaks. Noise suppression and
+  // AGC options are passed through unchanged.
+  //
+  // On ADMs with a coupled platform AEC/NS topology (Apple VPIO), explicitly
+  // disabling AEC already keeps the whole shared platform path from being
+  // (re-)enabled (see `echo_or_noise_has_disabled_component` in
+  // ResolveCoupledAudioProcessingPath), so a caller-requested *automatic*
+  // noise suppression transparently falls back to software instead of being
+  // dropped. A caller-requested *strict platform-only* noise suppression
+  // (`noise_suppression_mode == kPlatform`) has no software fallback by
+  // definition, so it ends up disabled rather than degraded -- this matches
+  // the pre-existing coupled-topology resolution behavior for any caller that
+  // explicitly disables AEC (see ResolveAudioProcessingSoftwareFromPlatformState's
+  // kPlatform case), not something introduced by stereo mode; it is not
+  // fixed up here because doing so would mean overriding the noise
+  // suppression option, which stereo mode intentionally leaves untouched.
+  AudioOptions options_in = options_in_param;
+  if (adm != nullptr && adm->StereoModeEnabled()) {
+    options_in.echo_cancellation = false;
+    options_in.echo_cancellation_mode = std::nullopt;
+  }
+
   AudioProcessingApplyResult apply_result;
   apply_result.resolved_options = options_in;
 
