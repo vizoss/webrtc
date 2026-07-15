@@ -82,6 +82,24 @@
   _config.gain_controller2.enabled = value;
 }
 
+// config.pipeline.multi_channel_capture / multi_channel_render
+
+- (BOOL)isMultiChannelCaptureEnabled {
+  return _config.pipeline.multi_channel_capture;
+}
+
+- (void)setIsMultiChannelCaptureEnabled:(BOOL)value {
+  _config.pipeline.multi_channel_capture = value;
+}
+
+- (BOOL)isMultiChannelRenderEnabled {
+  return _config.pipeline.multi_channel_render;
+}
+
+- (void)setIsMultiChannelRenderEnabled:(BOOL)value {
+  _config.pipeline.multi_channel_render = value;
+}
+
 #pragma mark - Private
 
 - (instancetype)initWithNativeAudioProcessingConfig:(webrtc::AudioProcessing::Config)config {

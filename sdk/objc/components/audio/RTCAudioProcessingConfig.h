@@ -31,6 +31,15 @@ RTC_OBJC_EXPORT
 @property(nonatomic, assign) BOOL isAutoGainControl1Enabled;
 @property(nonatomic, assign) BOOL isAutoGainControl2Enabled;
 
+// Whether APM processes capture/render audio as multi-channel internally
+// (rather than downmixing to mono first) -- this gates whether
+// capturePostProcessingDelegate/renderPreProcessingDelegate see more than 1
+// channel, independent of whether the AudioDeviceModule itself captures/plays
+// out in stereo (see RTCAudioDeviceModule.stereoModeEnabled). Both must be
+// enabled to get real multi-channel audio all the way through a custom
+// processing delegate.
+@property(nonatomic, assign) BOOL isMultiChannelCaptureEnabled;
+@property(nonatomic, assign) BOOL isMultiChannelRenderEnabled;
 
 @end
 
