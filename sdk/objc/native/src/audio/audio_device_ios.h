@@ -153,13 +153,17 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
 
   // Single global toggle: the VoiceProcessingIO unit uses a single shared
   // ASBD for both scopes (see VoiceProcessingAudioUnit::GetFormat()), so
-  // SetStereoRecording()/SetStereoPlayout() both forward here. Not an
-  // override of AudioDeviceGeneric (which has no such combined concept);
-  // called directly by AudioDeviceModuleIOS, which owns this class
-  // concretely. Pushes the preferred channel count to the audio session,
-  // clamps to what's actually available, and restarts the audio unit (if one
-  // exists) with the new channel count.
-  int32_t SetStereoMode(bool enable);
+  // SetStereoRecording()/SetStereoPlayout() both forward here. This class is
+  // owned concretely by two different wrapper classes depending on
+  // RTCAudioDeviceModuleType (AudioDeviceModuleIOS for the now-unused direct
+  // 2-arg CreateAudioDeviceModule() factory, and -- for the actual
+  // .platformDefault path used by RTCPeerConnectionFactory -- the generic,
+  // cross-platform AudioDeviceModuleImpl, which is why this is declared on
+  // AudioDeviceGeneric itself rather than being IOS-wrapper-specific). Pushes
+  // the preferred channel count to the audio session, clamps to what's
+  // actually available, and restarts the audio unit (if one exists) with the
+  // new channel count.
+  int32_t SetStereoMode(bool enable) override;
 
   // AudioSessionObserver methods. May be called from any thread.
   void OnInterruptionBegin() override;

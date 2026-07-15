@@ -133,6 +133,10 @@ class AudioDeviceGeneric {
 #if defined(WEBRTC_IOS)
   virtual int GetPlayoutAudioParameters(AudioParameters* params) const;
   virtual int GetRecordAudioParameters(AudioParameters* params) const;
+  // Single global toggle for stereo mode; see AudioDeviceModule::SetStereoMode().
+  // Default (unsupported) implementation returns -1, matching other optional
+  // methods on this interface.
+  virtual int32_t SetStereoMode(bool enable) { return -1; }
 #endif  // WEBRTC_IOS
 
   virtual int32_t SetObserver(AudioDeviceObserver* observer) { return -1; }

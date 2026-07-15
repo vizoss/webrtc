@@ -13,6 +13,7 @@
 
 #if defined(WEBRTC_INCLUDE_INTERNAL_AUDIO_DEVICE)
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 
@@ -161,6 +162,12 @@ class AudioDeviceModuleImpl : public AudioDeviceModuleForTest {
 #if defined(WEBRTC_IOS)
   int GetPlayoutAudioParameters(AudioParameters* params) const override;
   int GetRecordAudioParameters(AudioParameters* params) const override;
+  // Single global toggle: forwards to the shared AudioDeviceIOS::SetStereoMode()
+  // (see there for why SetStereoPlayout()/SetStereoRecording() below are
+  // deliberately no-ops on this platform). StereoModeEnabled() tracks the
+  // requested mode locally since AudioDeviceGeneric has no such concept.
+  int32_t SetStereoMode(bool enable) override;
+  bool StereoModeEnabled() const override;
 #endif  // WEBRTC_IOS
 
   int32_t SetObserver(AudioDeviceObserver* observer) override;
@@ -183,6 +190,7 @@ class AudioDeviceModuleImpl : public AudioDeviceModuleForTest {
   bool initialized_ = false;
 #if defined(WEBRTC_IOS)
   bool bypass_voice_processing_;
+  std::atomic<bool> stereo_mode_enabled_{false};
 #endif
   AudioDeviceBuffer audio_device_buffer_;
   std::unique_ptr<AudioDeviceGeneric> audio_device_;

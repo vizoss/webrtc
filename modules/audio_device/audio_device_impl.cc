@@ -509,6 +509,23 @@ int32_t AudioDeviceModuleImpl::StereoRecordingIsAvailable(
 int32_t AudioDeviceModuleImpl::SetStereoRecording(bool enable) {
   RTC_LOG(LS_INFO) << __FUNCTION__ << "(" << enable << ")";
   CHECKinitialized_();
+#if defined(WEBRTC_IOS)
+  // Deliberately a no-op on iOS: the only automatic caller of this legacy
+  // per-direction setter is adm_helpers::Init(), which probes playout and
+  // recording availability *independently* and calls
+  // SetStereoPlayout()/SetStereoRecording() with each direction's own
+  // hardware capability -- not the app's intent. Since playout and recording
+  // share one ASBD on this path (see AudioDeviceIOS::SetStereoMode()), and
+  // iPhone microphones aren't stereo-capable, honoring
+  // SetStereoRecording(false) here would silently clobber back to mono a
+  // stereo mode the app had just explicitly requested via SetStereoMode()
+  // (SetStereoPlayout() runs first in that init sequence, so
+  // SetStereoRecording() would always run last and always win). SetStereoMode()
+  // is the sole supported way to change stereo mode on this platform; this
+  // setter is kept only to satisfy the generic AudioDeviceModule interface
+  // that adm_helpers::Init() unconditionally calls.
+  return 0;
+#else
   if (audio_device_->RecordingIsInitialized()) {
     RTC_LOG(LS_ERROR)
         << "unable to set stereo mode after recording is initialized";
@@ -526,6 +543,7 @@ int32_t AudioDeviceModuleImpl::SetStereoRecording(bool enable) {
   }
   audio_device_buffer_.SetRecordingChannels(nChannels);
   return 0;
+#endif
 }
 
 int32_t AudioDeviceModuleImpl::StereoRecording(bool* enabled) const {
@@ -555,6 +573,13 @@ int32_t AudioDeviceModuleImpl::StereoPlayoutIsAvailable(bool* available) const {
 int32_t AudioDeviceModuleImpl::SetStereoPlayout(bool enable) {
   RTC_LOG(LS_INFO) << __FUNCTION__ << "(" << enable << ")";
   CHECKinitialized_();
+#if defined(WEBRTC_IOS)
+  // Deliberately a no-op on iOS: see SetStereoRecording() for why this legacy
+  // per-direction setter must not touch hardware or stereo_mode_enabled_ on
+  // this platform. SetStereoMode() is the sole supported way to change
+  // stereo mode here.
+  return 0;
+#else
   if (audio_device_->PlayoutIsInitialized()) {
     RTC_LOG(LS_ERROR)
         << "unable to set stereo mode while playing side is initialized";
@@ -570,6 +595,7 @@ int32_t AudioDeviceModuleImpl::SetStereoPlayout(bool enable) {
   }
   audio_device_buffer_.SetPlayoutChannels(nChannels);
   return 0;
+#endif
 }
 
 int32_t AudioDeviceModuleImpl::StereoPlayout(bool* enabled) const {
@@ -896,6 +922,20 @@ int AudioDeviceModuleImpl::GetRecordAudioParameters(
   int r = audio_device_->GetRecordAudioParameters(params);
   RTC_LOG(LS_INFO) << "output: " << r;
   return r;
+}
+
+int32_t AudioDeviceModuleImpl::SetStereoMode(bool enable) {
+  RTC_LOG(LS_INFO) << __FUNCTION__ << "(" << enable << ")";
+  RTC_CHECK(audio_device_);
+  int32_t result = audio_device_->SetStereoMode(enable);
+  if (result == 0) {
+    stereo_mode_enabled_.store(enable);
+  }
+  return result;
+}
+
+bool AudioDeviceModuleImpl::StereoModeEnabled() const {
+  return stereo_mode_enabled_.load();
 }
 #endif  // WEBRTC_IOS
 
