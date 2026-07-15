@@ -508,9 +508,15 @@ class AndroidAudioDeviceModule : public AudioDeviceModule {
   int32_t SetStereoMode(bool enable) override {
     RTC_DLOG(LS_INFO) << __FUNCTION__ << "(" << enable << ")";
     RTC_DCHECK(thread_checker_.IsCurrent());
-    if (!initialized_) {
-      return -1;
-    }
+    // Deliberately not gated on `initialized_`: Init() only runs when the
+    // first PeerConnection is created (see
+    // ConnectionContext::AddRefMediaEngine()), which can be long after the
+    // factory (and this ADM) is constructed, so callers need to be able to
+    // set the desired mode before that happens. input_/output_ handle being
+    // called pre-Init safely: they just update their own channel
+    // configuration and return without touching any not-yet-created
+    // hardware objects.
+    //
     // Best-effort on both directions; each falls back to mono internally if
     // the hardware doesn't support stereo. Neither call is treated as fatal:
     // stereo_mode_enabled_ tracks the requested mode, independent of whether

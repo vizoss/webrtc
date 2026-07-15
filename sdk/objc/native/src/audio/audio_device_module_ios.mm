@@ -109,6 +109,11 @@ int32_t AudioDeviceModuleIOS::Init() {
     ReportError(kInitializationFailed);
     return -1;
   }
+  // Apply any stereo mode requested via SetStereoMode() before `audio_device_`
+  // existed (see SetStereoMode()).
+  if (stereo_mode_enabled_.load()) {
+    audio_device_->SetStereoMode(true);
+  }
   initialized_ = true;
   return 0;
 }
@@ -419,7 +424,19 @@ int32_t AudioDeviceModuleIOS::StereoPlayout(bool* enabled) const {
 
 int32_t AudioDeviceModuleIOS::SetStereoMode(bool enable) {
   RTC_DLOG(LS_INFO) << __FUNCTION__ << "(" << enable << ")";
-  CHECKinitialized_();
+  // Deliberately not gated on CHECKinitialized_(): Init() only runs when the
+  // first PeerConnection is created (see
+  // ConnectionContext::AddRefMediaEngine()), which can be long after the
+  // factory (and this ADM) is constructed, so callers need to be able to set
+  // the desired mode before that happens. Unlike the Android ADM, `audio_device_`
+  // itself (not just its init state) doesn't exist yet at that point -- it's
+  // constructed inside Init() -- so there's nothing to forward to yet; just
+  // record the desired mode and let Init() apply it once the device exists
+  // (see below).
+  if (!audio_device_) {
+    stereo_mode_enabled_.store(enable);
+    return 0;
+  }
   // Both directions are coupled on this path (see AudioDeviceIOS::SetStereoMode()),
   // so either individual setter would do the same thing; call the combined
   // entry point directly for clarity.
