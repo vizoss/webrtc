@@ -349,15 +349,20 @@ int32_t AudioDeviceModuleIOS::StereoRecordingIsAvailable(
 int32_t AudioDeviceModuleIOS::SetStereoRecording(bool enable) {
   RTC_DLOG(LS_INFO) << __FUNCTION__ << "(" << enable << ")";
   CHECKinitialized_();
-  if (audio_device_->SetStereoRecording(enable) != 0) {
-    RTC_LOG(LS_WARNING) << "stereo recording is not supported";
-    ReportError(kStereoRecordingFailed);
-    return -1;
-  }
-  // Recording and playout are coupled on this path (see
-  // AudioDeviceIOS::SetStereoRecording()), so this call affects the same
-  // combined state SetStereoMode() tracks.
-  stereo_mode_enabled_.store(enable);
+  // Deliberately a no-op: the only automatic caller of this legacy
+  // per-direction setter is adm_helpers::Init(), which probes playout and
+  // recording availability *independently* and calls
+  // SetStereoPlayout()/SetStereoRecording() with each direction's own
+  // hardware capability -- not the app's intent. Since playout and recording
+  // share one ASBD on this path (see AudioDeviceIOS::SetStereoMode()), and
+  // iPhone microphones aren't stereo-capable, honoring
+  // SetStereoRecording(false) here would silently clobber back to mono a
+  // stereo mode the app had just explicitly requested via SetStereoMode()
+  // (SetStereoPlayout() runs first in that init sequence, so
+  // SetStereoRecording() would always run last and always win). SetStereoMode()
+  // is the sole supported way to change stereo mode on this ADM; this setter
+  // is kept only to satisfy the generic AudioDeviceModule interface that
+  // adm_helpers::Init() unconditionally calls.
   return 0;
 }
 
@@ -390,22 +395,11 @@ int32_t AudioDeviceModuleIOS::StereoPlayoutIsAvailable(bool* available) const {
 int32_t AudioDeviceModuleIOS::SetStereoPlayout(bool enable) {
   RTC_DLOG(LS_INFO) << __FUNCTION__ << "(" << enable << ")";
   CHECKinitialized_();
-  // AudioDeviceIOS::SetStereoPlayout() (via SetStereoMode()) already stops,
-  // reconfigures, and restarts the audio unit as needed, and updates the
-  // audio device buffer's channel count to the achieved (possibly
-  // hardware-clamped) value via UpdateAudioDeviceBuffer() -- so unlike the
-  // old stub this no longer rejects being called while playout is
-  // initialized, and no longer separately (and incorrectly, ignoring
-  // hardware clamping) pokes SetPlayoutChannels() here.
-  if (audio_device_->SetStereoPlayout(enable) != 0) {
-    RTC_LOG(LS_WARNING) << "stereo playout is not supported";
-    ReportError(kStereoPlayoutFailed);
-    return -1;
-  }
-  // Recording and playout are coupled on this path (see
-  // AudioDeviceIOS::SetStereoPlayout()), so this call affects the same
-  // combined state SetStereoMode() tracks.
-  stereo_mode_enabled_.store(enable);
+  // Deliberately a no-op: see SetStereoRecording() for why this legacy
+  // per-direction setter must not touch hardware or stereo_mode_enabled_.
+  // SetStereoMode() is the sole supported way to change stereo mode on this
+  // ADM; this setter is kept only to satisfy the generic AudioDeviceModule
+  // interface that adm_helpers::Init() unconditionally calls.
   return 0;
 }
 
