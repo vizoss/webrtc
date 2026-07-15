@@ -58,19 +58,15 @@ static jlong JNI_JavaAudioDeviceModule_CreateAudioDeviceModule(
           .release());
 }
 
-static jboolean JNI_JavaAudioDeviceModule_SetStereoMode(
-    JNIEnv* env,
-    jlong native_audio_device_module,
-    jboolean enable) {
-  return reinterpret_cast<AudioDeviceModule*>(native_audio_device_module)
-             ->SetStereoMode(enable) == 0;
+static jboolean JNI_JavaAudioDeviceModule_SetStereoMode(JNIEnv* env,
+                                                        jlong adm,
+                                                        jboolean enable) {
+  return reinterpret_cast<AudioDeviceModule*>(adm)->SetStereoMode(enable) == 0;
 }
 
-static jboolean JNI_JavaAudioDeviceModule_IsStereoModeEnabled(
-    JNIEnv* env,
-    jlong native_audio_device_module) {
-  return reinterpret_cast<AudioDeviceModule*>(native_audio_device_module)
-      ->StereoModeEnabled();
+static jboolean JNI_JavaAudioDeviceModule_IsStereoModeEnabled(JNIEnv* env,
+                                                              jlong adm) {
+  return reinterpret_cast<AudioDeviceModule*>(adm)->StereoModeEnabled();
 }
 
 }  // namespace jni

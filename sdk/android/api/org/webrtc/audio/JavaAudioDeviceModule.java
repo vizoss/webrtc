@@ -584,6 +584,6 @@ public class JavaAudioDeviceModule implements AudioDeviceModule {
       AudioManager audioManager, WebRtcAudioRecord audioInput, WebRtcAudioTrack audioOutput,
       long webrtcEnvRef, int inputSampleRate, int outputSampleRate, boolean useStereoInput,
       boolean useStereoOutput);
-  private static native boolean nativeSetStereoMode(long nativeAudioDeviceModule, boolean enable);
-  private static native boolean nativeIsStereoModeEnabled(long nativeAudioDeviceModule);
+  private static native boolean nativeSetStereoMode(long adm, boolean enable);
+  private static native boolean nativeIsStereoModeEnabled(long adm);
 }
