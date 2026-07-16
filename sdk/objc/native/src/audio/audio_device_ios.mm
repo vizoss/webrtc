@@ -434,9 +434,12 @@ OSStatus AudioDeviceIOS::OnDeliverRecordedData(
   // On real iOS devices, the size will only be set once (at first callback).
   // The buffer is interleaved, so its total sample count is
   // num_frames * channels, not just num_frames (which would only be correct
-  // for mono).
+  // for mono). Sized for the real hardware channel count (hardware_channels_)
+  // -- which may be lower than record_parameters_.channels() reports to
+  // AudioDeviceBuffer/APM -- since that's what audio_unit_->Render() below
+  // actually fills in.
   record_audio_buffer_.Clear();
-  record_audio_buffer_.SetSize(num_frames * record_parameters_.channels());
+  record_audio_buffer_.SetSize(num_frames * hardware_channels_);
 
   // Get audio timestamp for the audio.
   // The timestamp will not have NTP time epoch, but that will be addressed by
@@ -452,7 +455,7 @@ OSStatus AudioDeviceIOS::OnDeliverRecordedData(
   AudioBufferList audio_buffer_list;
   audio_buffer_list.mNumberBuffers = 1;
   AudioBuffer* audio_buffer = &audio_buffer_list.mBuffers[0];
-  audio_buffer->mNumberChannels = record_parameters_.channels();
+  audio_buffer->mNumberChannels = hardware_channels_;
   audio_buffer->mDataByteSize =
       record_audio_buffer_.size() * VoiceProcessingAudioUnit::kBytesPerSample;
   audio_buffer->mData = reinterpret_cast<int8_t*>(record_audio_buffer_.data());
@@ -478,8 +481,32 @@ OSStatus AudioDeviceIOS::OnDeliverRecordedData(
   // Get a pointer to the recorded audio and send it to the WebRTC ADB.
   // Use the FineAudioBuffer instance to convert between native buffer size
   // and the 10ms buffer size used by WebRTC.
+  const size_t reported_channels = record_parameters_.channels();
+  if (hardware_channels_ == reported_channels) {
+    fine_audio_buffer_->DeliverRecordedData(
+        record_audio_buffer_, kFixedRecordDelayEstimate, capture_timestamp_ns);
+    return noErr;
+  }
+
+  // The microphone only captured hardware_channels_ real channel(s) (always
+  // 1 here -- see SetStereoMode()), but the app requested stereo mode:
+  // duplicate the real sample(s) across reported_channels so everything
+  // downstream (AudioDeviceBuffer, APM, custom processing delegates)
+  // consistently sees the requested channel count instead of silently
+  // falling back to mono (that fallback happens automatically much further
+  // downstream, in ACM's ReMixFrame, if we didn't do this).
+  RTC_DCHECK_EQ(hardware_channels_, 1u);
+  RTC_DCHECK_EQ(reported_channels, 2u);
+  capture_reported_buffer_.Clear();
+  capture_reported_buffer_.SetSize(num_frames * reported_channels);
+  int16_t* duplicated = capture_reported_buffer_.data();
+  const int16_t* mono = record_audio_buffer_.data();
+  for (size_t i = 0; i < num_frames; ++i) {
+    duplicated[i * 2] = mono[i];
+    duplicated[i * 2 + 1] = mono[i];
+  }
   fine_audio_buffer_->DeliverRecordedData(
-      record_audio_buffer_, kFixedRecordDelayEstimate, capture_timestamp_ns);
+      capture_reported_buffer_, kFixedRecordDelayEstimate, capture_timestamp_ns);
   return noErr;
 }
 
@@ -494,7 +521,10 @@ OSStatus AudioDeviceIOS::OnGetPlayoutData(AudioUnitRenderActionFlags* flags,
   // channel count; see VoiceProcessingAudioUnit::GetFormat()).
   RTC_DCHECK_EQ(1, io_data->mNumberBuffers);
   AudioBuffer* audio_buffer = &io_data->mBuffers[0];
-  RTC_DCHECK_EQ(playout_parameters_.channels(), audio_buffer->mNumberChannels);
+  // audio_buffer reflects the real hardware ASBD (hardware_channels_), which
+  // may differ from playout_parameters_.channels() (the app's requested,
+  // reported channel count) -- see SetStereoMode().
+  RTC_DCHECK_EQ(hardware_channels_, audio_buffer->mNumberChannels);
 
   // Produce silence and give audio unit a hint about it if playout is not
   // activated.
@@ -560,10 +590,37 @@ OSStatus AudioDeviceIOS::OnGetPlayoutData(AudioUnitRenderActionFlags* flags,
   // `io_data` destination. The destination buffer is interleaved, so its
   // total sample count is num_frames * channels, not just num_frames (which
   // would only be correct for mono).
-  fine_audio_buffer_->GetPlayoutData(
-      webrtc::ArrayView<int16_t>(static_cast<int16_t*>(audio_buffer->mData),
-                                 num_frames * audio_buffer->mNumberChannels),
-      playout_delay_ms);
+  const size_t reported_channels = playout_parameters_.channels();
+  if (hardware_channels_ == reported_channels) {
+    fine_audio_buffer_->GetPlayoutData(
+        webrtc::ArrayView<int16_t>(static_cast<int16_t*>(audio_buffer->mData),
+                                   num_frames * audio_buffer->mNumberChannels),
+        playout_delay_ms);
+  } else {
+    // The output route only supports hardware_channels_ real channel(s)
+    // (always 1 here -- see SetStereoMode()), but the app requested stereo
+    // mode, so APM/the mixer produced reported_channels of processed audio
+    // (see AudioMixerImpl::Mix()). Fetch that into a scratch buffer and
+    // downmix (average) it down to the real hardware channel count before
+    // handing it to the audio unit -- rather than just taking one channel,
+    // in case the two reported channels are ever genuinely different (e.g.
+    // real remote stereo content), not just a mono-duplicated pair.
+    RTC_DCHECK_EQ(hardware_channels_, 1u);
+    RTC_DCHECK_EQ(reported_channels, 2u);
+    playout_reported_buffer_.Clear();
+    playout_reported_buffer_.SetSize(num_frames * reported_channels);
+    fine_audio_buffer_->GetPlayoutData(
+        webrtc::ArrayView<int16_t>(playout_reported_buffer_.data(),
+                                   playout_reported_buffer_.size()),
+        playout_delay_ms);
+    const int16_t* stereo = playout_reported_buffer_.data();
+    int16_t* mono = static_cast<int16_t*>(audio_buffer->mData);
+    for (size_t i = 0; i < num_frames; ++i) {
+      mono[i] = static_cast<int16_t>((static_cast<int32_t>(stereo[i * 2]) +
+                                      static_cast<int32_t>(stereo[i * 2 + 1])) /
+                                     2);
+    }
+  }
 
   last_hw_output_latency_update_sample_count_ += num_frames;
   total_playout_samples_count_.fetch_add(num_frames, std::memory_order_relaxed);
@@ -708,7 +765,7 @@ void AudioDeviceIOS::HandleSampleRateChange() {
   SetupAudioBuffersForActiveAudioSession();
 
   // Initialize the audio unit again with the new sample rate.
-  if (!audio_unit_->Initialize(playout_parameters_.sample_rate(), playout_parameters_.channels(),
+  if (!audio_unit_->Initialize(playout_parameters_.sample_rate(), hardware_channels_,
                                recording_is_initialized_)) {
     RTCLogError(@"Failed to initialize the audio unit with sample rate: %d",
                 playout_parameters_.sample_rate());
@@ -792,9 +849,9 @@ bool AudioDeviceIOS::RestartAudioUnit(bool enable_input) {
   }
 
   // Initialize the audio unit again with the same sample rate. Also re-reads
-  // the channel count, which SetStereoMode() may have just updated.
+  // the (hardware) channel count, which SetStereoMode() may have just updated.
   const double sample_rate = playout_parameters_.sample_rate();
-  const size_t channels = playout_parameters_.channels();
+  const size_t channels = hardware_channels_;
 
   if (!audio_unit_->Initialize(sample_rate, channels, enable_input)) {
     RTCLogError(@"Failed to initialize the audio unit with sample rate: %f", sample_rate);
@@ -863,7 +920,10 @@ void AudioDeviceIOS::SetupAudioBuffersForActiveAudioSession() {
 
   // The preferred channel count set via SetStereoMode() is only a hint to
   // the OS; the actual granted channel count may be lower (e.g. a mono-only
-  // microphone). Clamp to what the now-active session actually reports.
+  // microphone). This clamped value drives the real audio unit/hardware
+  // buffer handling (hardware_channels_); playout_parameters_/
+  // record_parameters_ keep reporting the app's originally *requested*
+  // channel count to AudioDeviceBuffer/APM regardless -- see SetStereoMode().
   // Both scopes share a single ASBD (see VoiceProcessingAudioUnit::GetFormat()),
   // so a single achieved value is used for both.
   const size_t requested_channels = playout_parameters_.channels();
@@ -881,15 +941,18 @@ void AudioDeviceIOS::SetupAudioBuffersForActiveAudioSession() {
                         << " channel(s) but the audio session only granted "
                         << achieved_channels << "; falling back.";
   }
+  hardware_channels_ = achieved_channels;
 
   // At this stage, we also know the exact IO buffer duration and can add
   // that info to the existing audio parameters where it is converted into
   // number of audio frames.
   // Example: IO buffer size = 0.008 seconds <=> 128 audio frames at 16kHz.
   // Hence, 128 is the size we expect to see in upcoming render callbacks.
-  playout_parameters_.reset(sample_rate, achieved_channels, io_buffer_duration);
+  // Channel count (requested_channels) is preserved as-is here, not replaced
+  // with achieved_channels -- see hardware_channels_ above.
+  playout_parameters_.reset(sample_rate, requested_channels, io_buffer_duration);
   RTC_DCHECK(playout_parameters_.is_complete());
-  record_parameters_.reset(sample_rate, achieved_channels, io_buffer_duration);
+  record_parameters_.reset(sample_rate, requested_channels, io_buffer_duration);
   RTC_DCHECK(record_parameters_.is_complete());
   RTC_LOG(LS_INFO) << " frames per I/O buffer: "
                    << playout_parameters_.frames_per_buffer();
@@ -977,7 +1040,7 @@ void AudioDeviceIOS::UpdateAudioUnit(bool can_play_or_record) {
     RTCLog(@"Initializing audio unit for UpdateAudioUnit");
     ConfigureAudioSession();
     SetupAudioBuffersForActiveAudioSession();
-    if (!audio_unit_->Initialize(playout_parameters_.sample_rate(), playout_parameters_.channels(),
+    if (!audio_unit_->Initialize(playout_parameters_.sample_rate(), hardware_channels_,
                                  recording_is_initialized_)) {
       RTCLogError(@"Failed to initialize audio unit.");
       return;
@@ -1110,7 +1173,7 @@ bool AudioDeviceIOS::InitPlayOrRecord(bool enable_input) {
       return false;
     }
     SetupAudioBuffersForActiveAudioSession();
-    audio_unit_->Initialize(playout_parameters_.sample_rate(), playout_parameters_.channels(),
+    audio_unit_->Initialize(playout_parameters_.sample_rate(), hardware_channels_,
                             enable_input);
   }
 
@@ -1332,6 +1395,11 @@ int32_t AudioDeviceIOS::SetStereoMode(bool enable) {
   // Read back what the OS can grant right now with the session in its
   // current state; SetupAudioBuffersForActiveAudioSession() re-clamps again
   // once the session is next (re)activated, since availability can change.
+  // This is the real hardware/audio-unit channel count, tracked separately
+  // from playout_parameters_/record_parameters_ below: those report the
+  // app's *requested* channel count to AudioDeviceBuffer/APM regardless of
+  // what the hardware can actually deliver (OnDeliverRecordedData()/
+  // OnGetPlayoutData() duplicate/downmix between the two at the boundary).
   NSInteger achieved_channels = requested_channels;
   if (session.inputNumberOfChannels > 0) {
     achieved_channels = std::min(achieved_channels, session.inputNumberOfChannels);
@@ -1340,9 +1408,10 @@ int32_t AudioDeviceIOS::SetStereoMode(bool enable) {
     achieved_channels = std::min(achieved_channels, session.outputNumberOfChannels);
   }
   [session unlockForConfiguration];
+  hardware_channels_ = achieved_channels;
 
-  playout_parameters_.reset(playout_parameters_.sample_rate(), achieved_channels);
-  record_parameters_.reset(record_parameters_.sample_rate(), achieved_channels);
+  playout_parameters_.reset(playout_parameters_.sample_rate(), requested_channels);
+  record_parameters_.reset(record_parameters_.sample_rate(), requested_channels);
   UpdateAudioDeviceBuffer();
 
   if (!audio_unit_) {

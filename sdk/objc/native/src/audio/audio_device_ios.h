@@ -273,8 +273,21 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
   // component to the parameters; the native I/O buffer duration.
   // A RTC_CHECK will be hit if we for some reason fail to open an audio session
   // using the specified parameters.
+  // Reported to AudioDeviceBuffer/APM (and therefore to custom capture/render
+  // processing delegates): the app's *requested* channel count (see
+  // SetStereoMode()), independent of what the real hardware can deliver.
   AudioParameters playout_parameters_;
   AudioParameters record_parameters_;
+
+  // The real, current audio-unit/hardware channel count (both scopes share
+  // one ASBD -- see VoiceProcessingAudioUnit::GetFormat() -- so a single
+  // value covers both directions). May be lower than
+  // playout_parameters_/record_parameters_'s channel count when the
+  // microphone or output route doesn't support stereo; OnDeliverRecordedData()
+  // duplicates and OnGetPlayoutData() downmixes between the two counts at
+  // the hardware boundary so everything above that boundary consistently
+  // sees the requested (not hardware-limited) channel count.
+  size_t hardware_channels_ = 1;
 
   // The AudioUnit used to play and record audio.
   std::unique_ptr<VoiceProcessingAudioUnit> audio_unit_;
@@ -301,6 +314,20 @@ class AudioDeviceIOS : public AudioDeviceGeneric,
   // simulators, the size can vary from callback to callback and the size
   // will be changed dynamically to account for this behavior.
   webrtc::BufferT<int16_t> record_audio_buffer_;
+
+  // Scratch buffer used only when hardware_channels_ != record_parameters_
+  // .channels(): holds the real (hardware_channels_) samples from
+  // record_audio_buffer_ duplicated out to the reported channel count before
+  // handing off to fine_audio_buffer_. Only 1-real-channel-duplicated-to-2 is
+  // supported (the only combination SetStereoMode() ever requests).
+  webrtc::BufferT<int16_t> capture_reported_buffer_;
+
+  // Scratch buffer used only when hardware_channels_ != playout_parameters_
+  // .channels(): holds fine_audio_buffer_'s playout data at the reported
+  // channel count before it gets downmixed into the real (hardware_channels_)
+  // hardware buffer in OnGetPlayoutData(). Only 2-reported-downmixed-to-1 is
+  // supported (the only combination SetStereoMode() ever requests).
+  webrtc::BufferT<int16_t> playout_reported_buffer_;
 
   bool recording_is_initialized_;
 

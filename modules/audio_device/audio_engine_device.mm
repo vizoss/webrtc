@@ -2475,18 +2475,20 @@ int32_t AudioEngineDevice::ApplyDeviceEngineState(EngineStateUpdate state) {
     const size_t achieved_output_channels =
         std::min<size_t>(state.next.desired_output_channels, output_node_format.channelCount);
 
-    // Force interleaved regardless of the native node's own interleavedness
-    // (AVAudioEngine's internal standard format is typically deinterleaved
-    // once channels > 1). source_node_ is independently constructed with the
-    // always-interleaved rtc_output_format below, so this connection format
-    // only needs to match that for AVAudioEngine's automatic conversion
-    // between connected nodes to have a single, unambiguous interleaved
-    // shape to convert into/out of.
+    // Match the native node's own interleavedness (AVAudioEngine's internal
+    // audio-unit-backed nodes -- mainMixerNode, outputNode -- reject being
+    // connected with an interleaved format once channels > 1: attempting
+    // that fails with kAudioUnitErr_FormatNotSupported (-10868) when
+    // connecting to outputNode below. source_node_ is independently
+    // constructed with the always-interleaved rtc_output_format, and
+    // AVAudioEngine converts between that and this connection format
+    // automatically regardless of the latter's interleavedness, so there's
+    // no need (and, per the above, no way) to force this one to interleaved.
     AVAudioFormat* engine_output_format = [[AVAudioFormat alloc]
         initWithCommonFormat:output_node_format.commonFormat  // Usually float32
                   sampleRate:output_node_format.sampleRate
                     channels:achieved_output_channels
-                 interleaved:YES];
+                 interleaved:output_node_format.isInterleaved];
 
     audio_device_buffer_->SetPlayoutSampleRate(engine_output_format.sampleRate);
     audio_device_buffer_->SetPlayoutChannels(engine_output_format.channelCount);
@@ -2653,21 +2655,32 @@ int32_t AudioEngineDevice::ApplyDeviceEngineState(EngineStateUpdate state) {
     const size_t achieved_input_channels =
         std::min<size_t>(state.next.desired_input_channels, input_node_format.channelCount);
 
-    // Force interleaved regardless of the native node's own interleavedness.
-    // This matters much more here than for output: AVAudioSinkNode has no
-    // initWithFormat: initializer, so unlike source_node_ (which is
-    // independently constructed with the always-interleaved
-    // rtc_input_format), sink_node_'s receiver block gets exactly whatever
-    // format it is connected with below. If that format were deinterleaved
-    // (the AVAudioEngine standard/native format once channels > 1), the sink
-    // block would receive multiple separate buffers instead of one
-    // interleaved buffer, breaking the `mNumberBuffers == 1` assumption the
-    // conversion code below depends on.
+    // What's reported to AudioDeviceBuffer/APM (and therefore to
+    // capturePostProcessingDelegate) -- always the app's requested channel
+    // count, regardless of what the microphone can actually capture. When
+    // the hardware can't deliver that many real channels, the sink block
+    // below duplicates the real capture data across the requested channel
+    // count before delivering it, so everything downstream of the ADM
+    // consistently sees stereo mode's requested channel count rather than
+    // silently falling back to mono (that fallback happens automatically
+    // much further downstream, in ACM's ReMixFrame, if we didn't do this).
+    const size_t reported_input_channels = state.next.desired_input_channels;
+
+    // Match the native node's own interleavedness, same as engine_output_format
+    // above: AVAudioEngine's audio-unit-backed nodes (inputNode,
+    // input_mixer_node_) reject being connected with an interleaved format
+    // once channels > 1 (kAudioUnitErr_FormatNotSupported, -10868). Unlike
+    // source_node_ on the output side, AVAudioSinkNode has no independent
+    // format of its own -- sink_node_'s receiver block gets exactly whatever
+    // format it is connected with, so once channels > 1 it now receives
+    // `achieved_input_channels` separate (deinterleaved) buffers instead of
+    // one interleaved buffer. The sink block below (and the AudioConverter
+    // it feeds) is written to handle that.
     AVAudioFormat* engine_input_format = [[AVAudioFormat alloc]
         initWithCommonFormat:input_node_format.commonFormat  // Usually float32
                   sampleRate:input_node_format.sampleRate
                     channels:achieved_input_channels
-                 interleaved:YES];
+                 interleaved:input_node_format.isInterleaved];
 
     AVAudioFormat* rtc_input_format =
         [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16
@@ -2676,8 +2689,8 @@ int32_t AudioEngineDevice::ApplyDeviceEngineState(EngineStateUpdate state) {
                                         interleaved:YES];
 
     audio_device_buffer_->SetRecordingSampleRate(rtc_input_format.sampleRate);
-    audio_device_buffer_->SetRecordingChannels(rtc_input_format.channelCount);
-    record_parameters_.reset(rtc_input_format.sampleRate, rtc_input_format.channelCount);
+    audio_device_buffer_->SetRecordingChannels(reported_input_channels);
+    record_parameters_.reset(rtc_input_format.sampleRate, reported_input_channels);
     RTC_DCHECK(audio_device_buffer_ != nullptr);
     fine_audio_buffer_.reset(new FineAudioBuffer(audio_device_buffer_.get()));
 
@@ -2718,27 +2731,46 @@ int32_t AudioEngineDevice::ApplyDeviceEngineState(EngineStateUpdate state) {
       });
     }
 
+    // Scratch buffer for duplicating real (achieved_input_channels) capture
+    // data across the reported (app-requested) channel count when they
+    // differ. Allocated unconditionally and sized for the worst case so a
+    // later channel-count change (which always goes through a full engine
+    // recreate, rebuilding this whole step) doesn't need to reallocate it
+    // from the real-time sink block.
+    if (capture_duplicate_buffer_ == nullptr) {
+      capture_duplicate_buffer_ = std::make_unique<int16_t[]>(kMaximumFramesPerBuffer * 2);
+
+      rollback_actions.push_back([this]() {
+        RTC_DCHECK_RUN_ON(thread_);
+        LOGI() << "Rolling back capture duplicate buffer setup (Device)...";
+        capture_duplicate_buffer_.reset();
+      });
+    }
+
     // Convert to Int16 buffers within the sink block.
     // Captured by value: fixed for the lifetime of this block (a channel
     // count change goes through DidUpdateChannels() -> full engine recreate,
     // which rebuilds this block from scratch), so there's no need to re-read
     // it via an atomic load on this real-time capture callback.
-    const size_t input_channels_for_block = achieved_input_channels;
+    const size_t input_channels_for_block = reported_input_channels;
+    const size_t achieved_input_channels_for_block = achieved_input_channels;
+    // rtc_input_format (the converter's output) is always interleaved
+    // regardless of engine_input_format's (the converter's input)
+    // interleavedness, so its bytes-per-frame is captured here rather than
+    // derived from inputData in the block below: once channels > 1 and
+    // engine_input_format is deinterleaved, inputData's buffers each hold
+    // only one channel's worth of samples, which means something different
+    // from rtc_input_format's own (interleaved, all-channels) bytes-per-frame.
+    const UInt32 rtc_input_bytes_per_frame = rtc_input_format.streamDescription->mBytesPerFrame;
     AVAudioSinkNodeReceiverBlock sink_block =
         ^OSStatus(const AudioTimeStamp* timestamp, AVAudioFrameCount frameCount,
                   const AudioBufferList* inputData) {
-          RTC_DCHECK(inputData->mNumberBuffers == 1);
-
           AudioBufferList* converter_buffer_abl =
               const_cast<AudioBufferList*>(converter_buffer_.audioBufferList);
-          RTC_DCHECK(converter_buffer_abl->mNumberBuffers == inputData->mNumberBuffers);
+          RTC_DCHECK(converter_buffer_abl->mNumberBuffers == 1);
 
-          // Fails for conversions where there is a variation between the input and output data
-          // buffer sizes.
-          converter_buffer_abl->mBuffers[0].mDataByteSize = inputData->mBuffers[0].mDataByteSize;
-
-          RTC_DCHECK(converter_buffer_abl->mBuffers[0].mDataByteSize ==
-                     inputData->mBuffers[0].mDataByteSize);
+          converter_buffer_abl->mBuffers[0].mDataByteSize =
+              frameCount * rtc_input_bytes_per_frame;
 
           OSStatus err = AudioConverterConvertComplexBuffer(converter_ref_, frameCount, inputData,
                                                             converter_buffer_abl);
@@ -2747,11 +2779,31 @@ int32_t AudioEngineDevice::ApplyDeviceEngineState(EngineStateUpdate state) {
           const int16_t* rtc_buffer = (int16_t*)converter_buffer_abl->mBuffers[0].mData;  // Float32
           const int64_t capture_time_ns = timestamp->mHostTime * machTickUnitsToNanoseconds_;
 
-          // The converted buffer is interleaved, so its total sample count is
-          // frameCount * channels, not just frameCount (which would only be
-          // correct for mono).
+          if (achieved_input_channels_for_block == input_channels_for_block) {
+            // The converted buffer is interleaved, so its total sample count
+            // is frameCount * channels, not just frameCount (which would
+            // only be correct for mono).
+            fine_audio_buffer_->DeliverRecordedData(
+                webrtc::ArrayView<const int16_t>(rtc_buffer, frameCount * input_channels_for_block),
+                kFixedRecordDelayEstimate, capture_time_ns);
+            return noErr;
+          }
+
+          // The microphone only captured achieved_input_channels_for_block
+          // real channel(s) (always 1 here -- see SetStereoMode()), but the
+          // app requested stereo mode: duplicate the real sample(s) across
+          // input_channels_for_block so everything downstream consistently
+          // sees the requested channel count instead of silently falling
+          // back to mono.
+          RTC_DCHECK_EQ(achieved_input_channels_for_block, 1u);
+          RTC_DCHECK_EQ(input_channels_for_block, 2u);
+          int16_t* duplicated = capture_duplicate_buffer_.get();
+          for (AVAudioFrameCount i = 0; i < frameCount; ++i) {
+            duplicated[i * 2] = rtc_buffer[i];
+            duplicated[i * 2 + 1] = rtc_buffer[i];
+          }
           fine_audio_buffer_->DeliverRecordedData(
-              webrtc::ArrayView<const int16_t>(rtc_buffer, frameCount * input_channels_for_block),
+              webrtc::ArrayView<const int16_t>(duplicated, frameCount * input_channels_for_block),
               kFixedRecordDelayEstimate, capture_time_ns);
 
           return noErr;

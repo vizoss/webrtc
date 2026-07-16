@@ -616,6 +616,14 @@ class AudioEngineDevice : public AudioDeviceModule, public AudioSessionObserver 
   AudioConverterRef converter_ref_ = nullptr;
   AVAudioPCMBuffer* converter_buffer_;
 
+  // Scratch buffer used to duplicate a single real hardware capture channel
+  // into the app-requested channel count (see the "Enable input" step of
+  // ApplyDeviceEngineState()) when the microphone can't actually capture
+  // stereo. Sized for the worst case (2 channels); only ever used to go from
+  // 1 real channel to 2, since that's the only combination SetStereoMode()
+  // requests.
+  std::unique_ptr<int16_t[]> capture_duplicate_buffer_;
+
   void* configuration_observer_ RTC_GUARDED_BY(thread_) = nullptr;
 };
 }  // namespace webrtc
