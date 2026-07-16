@@ -305,6 +305,16 @@ int32_t AudioDeviceModuleImpl::Init() {
     RTC_LOG(LS_ERROR) << "Audio device initialization failed.";
     return -1;
   }
+#if defined(WEBRTC_IOS)
+  // Apply any stereo mode requested via SetStereoMode() before Init() ran
+  // (see SetStereoMode()): playout_parameters_/record_parameters_ don't have
+  // a valid sample rate until audio_device_->Init() (just above) sets them
+  // up, so applying earlier would hit
+  // AudioDeviceIOS::UpdateAudioDeviceBuffer()'s sample-rate DCHECK.
+  if (stereo_mode_enabled_.load()) {
+    audio_device_->SetStereoMode(true);
+  }
+#endif
   initialized_ = true;
   return 0;
 }
@@ -927,6 +937,16 @@ int AudioDeviceModuleImpl::GetRecordAudioParameters(
 int32_t AudioDeviceModuleImpl::SetStereoMode(bool enable) {
   RTC_LOG(LS_INFO) << __FUNCTION__ << "(" << enable << ")";
   RTC_CHECK(audio_device_);
+  if (!initialized_) {
+    // audio_device_->Init() hasn't run yet, so playout_parameters_/
+    // record_parameters_ don't have a valid sample rate yet -- calling
+    // SetStereoMode() this early would hit
+    // AudioDeviceIOS::UpdateAudioDeviceBuffer()'s
+    // RTC_DCHECK_GT(...sample_rate(), 0). Just record the desired mode; Init()
+    // applies it once the device is actually initialized.
+    stereo_mode_enabled_.store(enable);
+    return 0;
+  }
   int32_t result = audio_device_->SetStereoMode(enable);
   if (result == 0) {
     stereo_mode_enabled_.store(enable);
