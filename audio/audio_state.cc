@@ -66,7 +66,10 @@ void AudioState::SetPlayout(bool enabled) {
   if (enabled) {
     if (!receiving_streams_.empty()) {
       if (!adm->Playing()) {
-        if (adm->InitPlayout() == 0) {
+        int32_t init_result = adm->InitPlayout();
+        RTC_LOG(LS_INFO) << "[AudioDebug] AudioState::SetPlayout: InitPlayout()="
+                         << init_result;
+        if (init_result == 0) {
           adm->StartPlayout();
         }
       }
@@ -92,10 +95,13 @@ void AudioState::AddReceivingStream(
   if (playout_enabled_) {
     auto* adm = config_.audio_device_module.get();
     if (!adm->Playing()) {
-      if (adm->InitPlayout() == 0) {
+      int32_t init_result = adm->InitPlayout();
+      RTC_LOG(LS_INFO) << "[AudioDebug] AudioState::AddReceivingStream: InitPlayout()="
+                       << init_result;
+      if (init_result == 0) {
         adm->StartPlayout();
       } else {
-        RTC_DLOG_F(LS_ERROR) << "Failed to initialize playout.";
+        RTC_LOG(LS_ERROR) << "[AudioDebug] Failed to initialize playout.";
       }
     }
   }

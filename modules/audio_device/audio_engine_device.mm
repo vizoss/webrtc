@@ -493,6 +493,12 @@ int32_t AudioEngineDevice::InitPlayout() {
     return state;
   });
 
+  LOGI() << "[AudioDebug] InitPlayout result=" << result
+         << " category=" << [AVAudioSession sharedInstance].category.UTF8String
+         << " input_enabled=" << engine_state_.input_enabled
+         << " output_enabled=" << engine_state_.output_enabled
+         << " output_running=" << engine_state_.output_running;
+
   return result;
 }
 
@@ -547,6 +553,12 @@ int32_t AudioEngineDevice::InitRecording() {
     state.input_enabled = true;
     return state;
   });
+
+  LOGI() << "[AudioDebug] InitRecording result=" << result
+         << " category=" << [AVAudioSession sharedInstance].category.UTF8String
+         << " input_enabled=" << engine_state_.input_enabled
+         << " output_enabled=" << engine_state_.output_enabled
+         << " output_running=" << engine_state_.output_running;
 
   return result;
 }
