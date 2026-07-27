@@ -494,7 +494,9 @@ int32_t AudioEngineDevice::InitPlayout() {
   });
 
   LOGI() << "[AudioDebug] InitPlayout result=" << result
+#if !TARGET_OS_OSX
          << " category=" << [AVAudioSession sharedInstance].category.UTF8String
+#endif
          << " input_enabled=" << engine_state_.input_enabled
          << " output_enabled=" << engine_state_.output_enabled
          << " output_running=" << engine_state_.output_running;
@@ -555,7 +557,9 @@ int32_t AudioEngineDevice::InitRecording() {
   });
 
   LOGI() << "[AudioDebug] InitRecording result=" << result
+#if !TARGET_OS_OSX
          << " category=" << [AVAudioSession sharedInstance].category.UTF8String
+#endif
          << " input_enabled=" << engine_state_.input_enabled
          << " output_enabled=" << engine_state_.output_enabled
          << " output_running=" << engine_state_.output_running;
