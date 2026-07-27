@@ -28,6 +28,13 @@ namespace {
 using AvailabilityFn = bool (AudioDeviceModule::*)() const;
 using EnableFn = int32_t (AudioDeviceModule::*)(bool);
 
+std::string OptBoolToString(std::optional<bool> value) {
+  if (!value.has_value()) {
+    return "unset";
+  }
+  return *value ? "true" : "false";
+}
+
 enum class PlatformEffectEnableResult {
   kEnabled,
   kNoAudioDeviceModule,
@@ -384,6 +391,15 @@ AudioProcessingApplyResult ApplyAudioProcessingOptions(AudioProcessing *apm, Aud
         ResolveHighPassFilter(options_in.highpass_filter, options_in.highpass_filter_mode);
   }
 
+  RTC_LOG(LS_INFO) << "[AudioDebug] ApplyAudioProcessingOptions: stereo_mode="
+                   << (adm != nullptr && adm->StereoModeEnabled())
+                   << " requested(aec=" << OptBoolToString(options_in_param.echo_cancellation)
+                   << ", ns=" << OptBoolToString(options_in_param.noise_suppression)
+                   << ", agc=" << OptBoolToString(options_in_param.auto_gain_control)
+                   << ") resolved-software(aec=" << OptBoolToString(software_options.echo_cancellation)
+                   << ", ns=" << OptBoolToString(software_options.noise_suppression)
+                   << ", agc=" << OptBoolToString(software_options.auto_gain_control) << ")";
+
   if (apm == nullptr) {
     return apply_result;
   }
@@ -414,7 +430,22 @@ AudioProcessingApplyResult ApplyAudioProcessingOptions(AudioProcessing *apm, Aud
     apm_config.noise_suppression.level = AudioProcessing::Config::NoiseSuppression::Level::kHigh;
   }
 
+  RTC_LOG(LS_INFO) << "[AudioDebug] ApplyConfig before-apply: aec=" << apm_config.echo_canceller.enabled
+                   << " ns=" << apm_config.noise_suppression.enabled
+                   << " gc1.enabled=" << apm_config.gain_controller1.enabled
+                   << " gc1.mode=" << static_cast<int>(apm_config.gain_controller1.mode)
+                   << " gc2.enabled=" << apm_config.gain_controller2.enabled
+                   << " gc2.fixed_digital.gain_db=" << apm_config.gain_controller2.fixed_digital.gain_db
+                   << " gc2.adaptive_digital.enabled=" << apm_config.gain_controller2.adaptive_digital.enabled;
+
   apm->ApplyConfig(apm_config);
+
+  AudioProcessing::Config applied_config = apm->GetConfig();
+  RTC_LOG(LS_INFO) << "[AudioDebug] ApplyConfig after-apply (read back): aec="
+                   << applied_config.echo_canceller.enabled << " ns=" << applied_config.noise_suppression.enabled
+                   << " gc1.enabled=" << applied_config.gain_controller1.enabled
+                   << " gc2.enabled=" << applied_config.gain_controller2.enabled;
+
   return apply_result;
 }
 

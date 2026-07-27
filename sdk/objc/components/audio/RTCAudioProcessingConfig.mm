@@ -80,6 +80,11 @@
 
 - (void)setIsAutoGainControl2Enabled:(BOOL)value {
   _config.gain_controller2.enabled = value;
+  // `gain_controller2.enabled` only creates the AGC2 submodule; the actual
+  // gain adjustment happens in this nested adaptive-digital controller,
+  // which has its own independent `enabled` flag defaulting to false. Without
+  // this, toggling this property on has no audible effect at all.
+  _config.gain_controller2.adaptive_digital.enabled = value;
 }
 
 // config.pipeline.multi_channel_capture / multi_channel_render
