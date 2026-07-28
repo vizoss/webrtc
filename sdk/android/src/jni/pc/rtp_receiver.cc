@@ -140,5 +140,14 @@ static void JNI_RtpReceiver_SetFrameDecryptor(JNIEnv* jni,
               j_frame_decryptor_pointer)));
 }
 
+static void JNI_RtpReceiver_SetJitterBufferMinimumDelay(
+    JNIEnv* jni,
+    jlong j_rtp_receiver_pointer,
+    const jni_zero::JavaParamRef<jobject>& j_delay_seconds) {
+  reinterpret_cast<RtpReceiverInterface*>(j_rtp_receiver_pointer)
+      ->SetJitterBufferMinimumDelay(
+          JavaToNativeOptionalDouble(jni, j_delay_seconds));
+}
+
 }  // namespace jni
 }  // namespace webrtc

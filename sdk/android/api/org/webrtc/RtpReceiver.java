@@ -87,6 +87,16 @@ public class RtpReceiver {
     nativeSetFrameDecryptor(nativeRtpReceiver, frameDecryptor.getNativeFrameDecryptor());
   }
 
+  /**
+   * Sets the jitter buffer minimum delay until media playout for this receiver, in seconds.
+   * Actual observed delay may be higher depending on network conditions. Pass null to restore
+   * the default value.
+   */
+  public void setJitterBufferMinimumDelay(@Nullable Double delaySeconds) {
+    checkRtpReceiverExists();
+    nativeSetJitterBufferMinimumDelay(nativeRtpReceiver, delaySeconds);
+  }
+
   private void checkRtpReceiverExists() {
     if (nativeRtpReceiver == 0) {
       throw new IllegalStateException("RtpReceiver has been disposed.");
@@ -101,4 +111,6 @@ public class RtpReceiver {
   private static native long nativeSetObserver(long rtpReceiver, Observer observer);
   private static native void nativeUnsetObserver(long rtpReceiver, long nativeObserver);
   private static native void nativeSetFrameDecryptor(long rtpReceiver, long nativeFrameDecryptor);
+  private static native void nativeSetJitterBufferMinimumDelay(
+      long rtpReceiver, Double delaySeconds);
 }

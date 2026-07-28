@@ -100,6 +100,12 @@ RTC_OBJC_EXPORT
 
 - (instancetype)init NS_UNAVAILABLE;
 
+/** Sets the jitter buffer minimum delay until media playout for this
+ *  receiver, in seconds. Actual observed delay may be higher depending on
+ *  network conditions. Pass nil to restore the default value.
+ */
+- (void)setJitterBufferMinimumDelay:(nullable NSNumber *)delaySeconds;
+
 @end
 
 NS_ASSUME_NONNULL_END
