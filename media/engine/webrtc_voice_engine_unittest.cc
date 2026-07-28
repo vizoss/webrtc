@@ -517,26 +517,7 @@ TEST(AudioProcessingControllerTest, PlatformResolvesDisabledWhenEnableFails) {
   EXPECT_FALSE(apm_config.echo_canceller.enabled);
 }
 
-TEST(AudioProcessingControllerTest, StereoModeForcesEchoCancellationOff) {
-  webrtc::scoped_refptr<StereoModeMockAudioDeviceModule> adm =
-      webrtc::make_ref_counted<StereoModeMockAudioDeviceModule>();
-  adm->stereo_mode_enabled = true;
-  webrtc::AudioOptions options;
-  // The app didn't ask to change echo cancellation at all (as if this call
-  // were only about some unrelated option); stereo mode must still force it
-  // off.
-  options.auto_gain_control = true;
-  options.auto_gain_control_mode = webrtc::AudioProcessingMode::kAutomatic;
-
-  EXPECT_CALL(*adm, BuiltInAECIsAvailable()).WillOnce(Return(true));
-  EXPECT_CALL(*adm, EnableBuiltInAEC(false)).WillOnce(Return(0));
-  EXPECT_CALL(*adm, BuiltInAGCIsAvailable()).WillOnce(Return(false));
-
-  webrtc::AudioProcessing::Config apm_config = ApplyAudioProcessingOptionsForTest(options, adm.get());
-  EXPECT_FALSE(apm_config.echo_canceller.enabled);
-}
-
-TEST(AudioProcessingControllerTest, StereoModeLeavesNoiseSuppressionAndAgcUntouched) {
+TEST(AudioProcessingControllerTest, StereoModeDoesNotAffectAudioProcessingOptions) {
   webrtc::scoped_refptr<StereoModeMockAudioDeviceModule> adm =
       webrtc::make_ref_counted<StereoModeMockAudioDeviceModule>();
   adm->stereo_mode_enabled = true;
@@ -548,18 +529,19 @@ TEST(AudioProcessingControllerTest, StereoModeLeavesNoiseSuppressionAndAgcUntouc
   options.auto_gain_control = true;
   options.auto_gain_control_mode = webrtc::AudioProcessingMode::kAutomatic;
 
-  // Echo cancellation is forced off regardless of the request.
-  EXPECT_CALL(*adm, BuiltInAECIsAvailable()).WillOnce(Return(true));
-  EXPECT_CALL(*adm, EnableBuiltInAEC(false)).WillOnce(Return(0));
-  // Noise suppression and AGC follow the app's original (unmodified) request:
-  // platform unavailable for both, so automatic mode falls back to software,
-  // exactly as it would with stereo mode off (see
-  // AutomaticFallsBackToSoftwareWhenUnavailable).
+  // Stereo mode must not override any of the caller's requests -- echo
+  // cancellation, noise suppression, and AGC all resolve exactly as they
+  // would with stereo mode off (platform unavailable for all three here, so
+  // automatic mode falls back to software; see
+  // AutomaticFallsBackToSoftwareWhenUnavailable). Forcing AEC off
+  // unconditionally in stereo mode previously caused audible echo in
+  // acoustically-coupled scenarios (e.g. speakerphone with an open mic).
+  EXPECT_CALL(*adm, BuiltInAECIsAvailable()).WillOnce(Return(false));
   EXPECT_CALL(*adm, BuiltInNSIsAvailable()).WillOnce(Return(false));
   EXPECT_CALL(*adm, BuiltInAGCIsAvailable()).WillOnce(Return(false));
 
   webrtc::AudioProcessing::Config apm_config = ApplyAudioProcessingOptionsForTest(options, adm.get());
-  EXPECT_FALSE(apm_config.echo_canceller.enabled);
+  EXPECT_TRUE(apm_config.echo_canceller.enabled);
   EXPECT_TRUE(apm_config.noise_suppression.enabled);
   EXPECT_TRUE(apm_config.gain_controller1.enabled);
 }
