@@ -273,7 +273,9 @@ ScopedJavaLocalRef<jobject> CreatePeerConnectionFactoryForJava(
     std::unique_ptr<NetworkStatePredictorFactoryInterface>
         network_state_predictor_factory,
     std::unique_ptr<NetEqFactory> neteq_factory,
-    std::unique_ptr<AudioFrameProcessor> audio_frame_processor) {
+    std::unique_ptr<AudioFrameProcessor> audio_frame_processor,
+    bool multi_channel_capture_enabled,
+    bool multi_channel_render_enabled) {
   // talk/ assumes pretty widely that the current Thread is ThreadManager'd, but
   // ThreadManager only WrapCurrentThread()s the thread where it is first
   // created.  Since the semantics around when auto-wrapping happens in
@@ -324,8 +326,16 @@ ScopedJavaLocalRef<jobject> CreatePeerConnectionFactoryForJava(
         CustomAudioProcessing(std::move(audio_processor));
 #ifndef WEBRTC_EXCLUDE_AUDIO_PROCESSING_MODULE
   } else {
+    // Without multi-channel capture explicitly enabled, APM's echo
+    // controller downmixes the capture pipeline to a single channel
+    // whenever echo cancellation is enabled (see
+    // AudioProcessingImpl::num_proc_channels), silently discarding every
+    // channel past the first.
+    AudioProcessing::Config config;
+    config.pipeline.multi_channel_capture = multi_channel_capture_enabled;
+    config.pipeline.multi_channel_render = multi_channel_render_enabled;
     dependencies.audio_processing_builder =
-        std::make_unique<BuiltinAudioProcessingBuilder>();
+        std::make_unique<BuiltinAudioProcessingBuilder>(config);
 #endif
   }
   dependencies.video_encoder_factory =
@@ -365,7 +375,9 @@ JNI_PeerConnectionFactory_CreatePeerConnectionFactory(
     jlong native_network_controller_factory,
     jlong native_network_state_predictor_factory,
     jlong native_neteq_factory,
-    jlong native_audio_frame_processor) {
+    jlong native_audio_frame_processor,
+    jboolean multi_channel_capture_enabled,
+    jboolean multi_channel_render_enabled) {
   const Environment* env = reinterpret_cast<Environment*>(webrtc_env_ref);
   RTC_CHECK(env != nullptr);
   scoped_refptr<AudioProcessing> audio_processor(
@@ -385,7 +397,8 @@ JNI_PeerConnectionFactory_CreatePeerConnectionFactory(
           native_network_state_predictor_factory),
       TakeOwnershipOfUniquePtr<NetEqFactory>(native_neteq_factory),
       TakeOwnershipOfUniquePtr<AudioFrameProcessor>(
-          reinterpret_cast<jlong>(native_audio_frame_processor)));
+          reinterpret_cast<jlong>(native_audio_frame_processor)),
+      multi_channel_capture_enabled, multi_channel_render_enabled);
 }
 
 static void JNI_PeerConnectionFactory_FreeFactory(JNIEnv*, jlong j_p) {

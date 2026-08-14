@@ -183,6 +183,8 @@ public class PeerConnectionFactory {
     @Nullable private NetworkStatePredictorFactoryFactory networkStatePredictorFactoryFactory;
     @Nullable private NetEqFactoryFactory neteqFactoryFactory;
     @Nullable private AudioFrameProcessor audioFrameProcessor;
+    private boolean audioProcessingMultiChannelCaptureEnabled;
+    private boolean audioProcessingMultiChannelRenderEnabled;
 
     private Builder() {}
 
@@ -237,6 +239,24 @@ public class PeerConnectionFactory {
             "PeerConnectionFactory builder does not accept a null AudioProcessingFactory.");
       }
       this.audioProcessingFactory = audioProcessingFactory;
+      return this;
+    }
+
+    /**
+     * Enables multi-channel support in the built-in AudioProcessing (APM) pipeline for capture
+     * and/or render. Has no effect if a custom AudioProcessingFactory is set via
+     * setAudioProcessingFactory.
+     *
+     * <p>Without this, APM's echo controller downmixes the capture pipeline to a single channel
+     * whenever echo cancellation is enabled, silently discarding every channel past the first.
+     * Apps capturing/rendering more than one channel (e.g. with AudioDeviceModule stereo mode
+     * enabled) that also want echo cancellation must enable this, or the remote side of the call
+     * will lose all channels but the first.
+     */
+    public Builder setAudioProcessingMultiChannelEnabled(
+        boolean captureEnabled, boolean renderEnabled) {
+      this.audioProcessingMultiChannelCaptureEnabled = captureEnabled;
+      this.audioProcessingMultiChannelRenderEnabled = renderEnabled;
       return this;
     }
 
@@ -305,7 +325,8 @@ public class PeerConnectionFactory {
                 ? 0
                 : networkStatePredictorFactoryFactory.createNativeNetworkStatePredictorFactory(),
             neteqFactoryFactory == null ? 0 : neteqFactoryFactory.createNativeNetEqFactory(),
-            audioFrameProcessor == null ? 0 : audioFrameProcessor.getNativeAudioFrameProcessor());
+            audioFrameProcessor == null ? 0 : audioFrameProcessor.getNativeAudioFrameProcessor(),
+            audioProcessingMultiChannelCaptureEnabled, audioProcessingMultiChannelRenderEnabled);
         if (adm instanceof JavaAudioDeviceModule) {
           factory.audioProcessingPlatformPolicy =
               AudioTrack.AudioProcessingPlatformPolicy.fromJavaAudioDeviceModule(
@@ -646,7 +667,9 @@ public class PeerConnectionFactory {
       long audioDecoderFactory, VideoEncoderFactory encoderFactory,
       VideoDecoderFactory decoderFactory, long nativeAudioProcessor,
       long nativeFecControllerFactory, long nativeNetworkControllerFactory,
-      long nativeNetworkStatePredictorFactory, long neteqFactory, long nativeAudioFrameProcessor);
+      long nativeNetworkStatePredictorFactory, long neteqFactory, long nativeAudioFrameProcessor,
+      boolean audioProcessingMultiChannelCaptureEnabled,
+      boolean audioProcessingMultiChannelRenderEnabled);
 
   private static native long nativeCreatePeerConnection(long factory,
       PeerConnection.RTCConfiguration rtcConfig, MediaConstraints constraints, long nativeObserver,
