@@ -1366,6 +1366,18 @@ int32_t AudioEngineDevice::RecoverEngineIfNeeded() {
     return 0;
   }
 
+  constexpr int64_t kMinRecoveryIntervalMs = 3000;
+  const int64_t now_ms = webrtc::TimeMillis();
+  if (now_ms - last_engine_recovery_attempt_ms_ < kMinRecoveryIntervalMs) {
+    // A recovery cycle was already triggered recently and may still be in
+    // flight (ReconfigureEngine() completes asynchronously) -- see the
+    // field comment on last_engine_recovery_attempt_ms_.
+    LOGI() << "RecoverEngineIfNeeded: skipping, last attempt was "
+           << (now_ms - last_engine_recovery_attempt_ms_) << "ms ago";
+    return 0;
+  }
+  last_engine_recovery_attempt_ms_ = now_ms;
+
   LOGW() << "RecoverEngineIfNeeded: engine_state_ expects the engine to be "
             "running, but AVAudioEngine.isRunning is false. Forcing a "
             "stop+restart via ReconfigureEngine().";

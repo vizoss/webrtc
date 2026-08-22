@@ -531,6 +531,17 @@ class AudioEngineDevice : public AudioDeviceModule, public AudioSessionObserver 
 
   EngineState engine_state_ RTC_GUARDED_BY(thread_);
 
+  // Last time RecoverEngineIfNeeded() actually triggered a ReconfigureEngine()
+  // cycle (0 if never). Debounces bursts of near-simultaneous callers (e.g.
+  // several participants reaching "connected" within the same window) from
+  // each queuing their own stop+restart cycle -- ReconfigureEngine() posts
+  // an async task rather than completing synchronously, so without this,
+  // multiple callers can all observe the engine as still not running and
+  // each schedule their own cycle, stacking them back to back. That can
+  // leave the engine perpetually restarting without ever finishing, the
+  // same failure mode already seen with repeated enableStereoMode calls.
+  int64_t last_engine_recovery_attempt_ms_ RTC_GUARDED_BY(thread_) = 0;
+
   int32_t ModifyEngineState(std::function<EngineState(EngineState)> state_transform);
 
   int32_t ApplyDeviceEngineState(EngineStateUpdate state);
