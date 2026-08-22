@@ -227,6 +227,16 @@ RTC_OBJC_EXPORT
 @property(nonatomic, readonly) BOOL isPlaying;
 @property(nonatomic, readonly) BOOL isRecording;
 @property(nonatomic, readonly) BOOL isEngineRunning;
+
+// Checks whether the engine is running when it's supposed to be, and if
+// not, forces a stop+restart to recover. isEngineRunning can otherwise stay
+// NO indefinitely if the underlying AVAudioEngine stops without going
+// through an interruption or a route/configuration change, since nothing
+// else notices that kind of divergence. Only implemented for the
+// AudioEngineDevice ADM (audioDeviceModuleType == AudioEngine); a no-op
+// (returns 0) for other ADM types.
+- (NSInteger)recoverEngineIfNeeded;
+
 @property(nonatomic, readonly) BOOL isMicrophoneMuted;
 - (NSInteger)setMicrophoneMuted:(BOOL)muted;
 

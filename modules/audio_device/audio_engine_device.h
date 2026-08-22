@@ -389,6 +389,19 @@ class AudioEngineDevice : public AudioDeviceModule, public AudioSessionObserver 
 
   bool IsEngineRunning();
 
+  // Checks whether the desired engine state (input/output enabled+running)
+  // matches the actual AVAudioEngine.isRunning, and if not, forces a full
+  // stop+restart cycle via ReconfigureEngine(). ModifyEngineState() alone
+  // cannot detect or fix this kind of divergence: it only reconciles when
+  // the *desired* state changes (see EngineStateUpdate::HasNoChanges()), so
+  // if AVAudioEngine silently stops without going through
+  // OnInterruptionBegin/End or AVAudioEngineConfigurationChangeNotification,
+  // nothing else notices -- IsEngineRunning() can stay false indefinitely
+  // even though every other state field still says it should be running.
+  // Safe to call speculatively: a no-op when the engine already matches the
+  // desired state, or when nothing is supposed to be running at all.
+  int32_t RecoverEngineIfNeeded();
+
   int32_t SetEngineState(EngineState enable);
   int32_t GetEngineState(EngineState* enabled);
 

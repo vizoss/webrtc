@@ -386,6 +386,14 @@ class AudioDeviceObserver : public webrtc::AudioDeviceObserver {
   return _workerThread->BlockingCall([module] { return module->IsEngineRunning(); });
 }
 
+- (NSInteger)recoverEngineIfNeeded {
+  webrtc::AudioEngineDevice *module =
+      AudioEngineDeviceOrNull(_native.get(), _audioDeviceModuleType);
+  if (module == nullptr) return 0;
+
+  return _workerThread->BlockingCall([module] { return module->RecoverEngineIfNeeded(); });
+}
+
 - (BOOL)isMicrophoneMuted {
   return _workerThread->BlockingCall([self] {
     bool value = false;

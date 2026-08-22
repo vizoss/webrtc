@@ -1353,6 +1353,32 @@ bool AudioEngineDevice::IsEngineRunning() {
   return engine_device_.running;
 }
 
+int32_t AudioEngineDevice::RecoverEngineIfNeeded() {
+  LOGI() << "RecoverEngineIfNeeded";
+  RTC_DCHECK_RUN_ON(thread_);
+
+  if (!engine_state_.IsAnyRunning()) {
+    // Nothing is supposed to be running; no divergence to fix.
+    return 0;
+  }
+  if (engine_device_ != nil && engine_device_.running) {
+    // The actual engine already matches the desired state.
+    return 0;
+  }
+
+  LOGW() << "RecoverEngineIfNeeded: engine_state_ expects the engine to be "
+            "running, but AVAudioEngine.isRunning is false. Forcing a "
+            "stop+restart via ReconfigureEngine().";
+  // ReconfigureEngine() reconciles to a fully-stopped state and then back to
+  // the current engine_state_, which is exactly the same pattern already
+  // used to recover from AVAudioEngineConfigurationChangeNotification -- it
+  // is the one path that forces ApplyDeviceEngineState's "Step: Start
+  // engine" to run again (going through a real prev.IsAnyRunning()==false
+  // transition) even though engine_state_ itself never changed.
+  ReconfigureEngine();
+  return 0;
+}
+
 int32_t AudioEngineDevice::SetEngineState(EngineState new_state) {
   LOGI() << "SetEngineState";
   RTC_DCHECK_RUN_ON(thread_);
